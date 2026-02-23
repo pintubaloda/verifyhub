@@ -491,10 +491,30 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   const security = settings?.security
   const [baseDomain, setBaseDomain] = useState(defaults?.baseDomain || '')
   const [saving, setSaving] = useState(false)
+  const [planForm, setPlanForm] = useState({})
+  const [planSaving, setPlanSaving] = useState({})
 
   useEffect(() => {
     setBaseDomain(defaults?.baseDomain || '')
   }, [defaults?.baseDomain])
+
+  useEffect(() => {
+    const next = {}
+    for (const plugin of plugins) {
+      for (const pl of (plugin.plans || [])) {
+        next[pl.id] = {
+          name: pl.name,
+          priceUsd: pl.priceUsd,
+          cycle: pl.cycle,
+          durationDays: pl.durationDays,
+          maxDomains: pl.maxDomains,
+          maxVerificationsPerMonth: pl.maxVerificationsPerMonth,
+          isPopular: !!pl.isPopular,
+        }
+      }
+    }
+    setPlanForm(next)
+  }, [settings])
 
   const saveBaseDomain = async () => {
     setSaving(true)
@@ -514,6 +534,46 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
       toast.error('Network error while saving base domain.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const setPlanField = (planId, key, value) => {
+    setPlanForm(prev => ({
+      ...prev,
+      [planId]: { ...(prev[planId] || {}), [key]: value }
+    }))
+  }
+
+  const savePlan = async (planId) => {
+    const payload = planForm[planId]
+    if (!payload) return
+
+    setPlanSaving(prev => ({ ...prev, [planId]: true }))
+    try {
+      const body = {
+        name: payload.name,
+        priceUsd: Number(payload.priceUsd),
+        cycle: payload.cycle,
+        durationDays: Number(payload.durationDays),
+        maxDomains: Number(payload.maxDomains),
+        maxVerificationsPerMonth: Number(payload.maxVerificationsPerMonth),
+        isPopular: !!payload.isPopular,
+      }
+      const r = await API(`/api/admin/plans/${planId}`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        toast.error(d.error || 'Failed to update plan.')
+      } else {
+        toast.success('Plan updated.')
+        onRefresh?.()
+      }
+    } catch {
+      toast.error('Network error while updating plan.')
+    } finally {
+      setPlanSaving(prev => ({ ...prev, [planId]: false }))
     }
   }
 
@@ -589,9 +649,78 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:8 }}>
               {(p.plans || []).map(pl => (
                 <div key={pl.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:10, padding:10 }}>
-                  <div style={{ fontWeight:700, color:'#F0F4FF', fontSize:13 }}>{pl.name}</div>
-                  <div style={{ color:'#5A6A8A', fontSize:12 }}>${pl.priceUsd} · {pl.cycle}</div>
-                  <div style={{ color:'#5A6A8A', fontSize:12 }}>Domains: {pl.maxDomains} · Monthly: {pl.maxVerificationsPerMonth}</div>
+                  <input
+                    value={planForm[pl.id]?.name ?? ''}
+                    onChange={e => setPlanField(pl.id, 'name', e.target.value)}
+                    style={{ width:'100%', marginBottom:6, background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                  />
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:6 }}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={planForm[pl.id]?.priceUsd ?? 0}
+                      onChange={e => setPlanField(pl.id, 'priceUsd', e.target.value)}
+                      style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                    />
+                    <select
+                      value={planForm[pl.id]?.cycle ?? 'Annual'}
+                      onChange={e => setPlanField(pl.id, 'cycle', e.target.value)}
+                      style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                    >
+                      <option value="Monthly">Monthly</option>
+                      <option value="Annual">Annual</option>
+                    </select>
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:6 }}>
+                    <input
+                      type="number"
+                      value={planForm[pl.id]?.durationDays ?? 365}
+                      onChange={e => setPlanField(pl.id, 'durationDays', e.target.value)}
+                      style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                      title="Duration days"
+                    />
+                    <input
+                      type="number"
+                      value={planForm[pl.id]?.maxDomains ?? 1}
+                      onChange={e => setPlanField(pl.id, 'maxDomains', e.target.value)}
+                      style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                      title="Max domains"
+                    />
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:6, alignItems:'center', marginBottom:6 }}>
+                    <input
+                      type="number"
+                      value={planForm[pl.id]?.maxVerificationsPerMonth ?? 1000}
+                      onChange={e => setPlanField(pl.id, 'maxVerificationsPerMonth', e.target.value)}
+                      style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                      title="Max verifications per month"
+                    />
+                    <label style={{ color:'#5A6A8A', fontSize:11, display:'flex', gap:4, alignItems:'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={!!planForm[pl.id]?.isPopular}
+                        onChange={e => setPlanField(pl.id, 'isPopular', e.target.checked)}
+                      />
+                      Popular
+                    </label>
+                  </div>
+                  <button
+                    onClick={() => savePlan(pl.id)}
+                    disabled={!!planSaving[pl.id]}
+                    style={{
+                      width:'100%',
+                      background: planSaving[pl.id] ? '#162040' : 'linear-gradient(135deg,#4F8FFF,#B06AFF)',
+                      color:'#fff',
+                      border:'none',
+                      borderRadius:8,
+                      padding:'8px 10px',
+                      cursor: planSaving[pl.id] ? 'not-allowed' : 'pointer',
+                      fontSize:12,
+                      fontWeight:700,
+                    }}
+                  >
+                    {planSaving[pl.id] ? 'Saving...' : 'Save Plan'}
+                  </button>
                 </div>
               ))}
             </div>

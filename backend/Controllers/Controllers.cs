@@ -510,6 +510,35 @@ namespace VerifyHubPortal.Controllers
             return Ok(new { saved = true, baseDomain = normalized });
         }
 
+        [HttpPost("plans/{id}")]
+        public async Task<IActionResult> UpdatePlan(Guid id, [FromBody] UpdatePlanRequest req)
+        {
+            var plan = await _db.Plans.FirstOrDefaultAsync(p => p.Id == id);
+            if (plan == null) return NotFound(new { error = "Plan not found." });
+
+            if (string.IsNullOrWhiteSpace(req.Name))
+                return BadRequest(new { error = "Plan name is required." });
+            if (req.PriceUsd < 0)
+                return BadRequest(new { error = "Price must be >= 0." });
+            if (req.DurationDays <= 0)
+                return BadRequest(new { error = "Duration days must be > 0." });
+            if (req.MaxDomains <= 0)
+                return BadRequest(new { error = "Max domains must be > 0." });
+            if (req.MaxVerificationsPerMonth <= 0)
+                return BadRequest(new { error = "Max verifications per month must be > 0." });
+
+            plan.Name = req.Name.Trim();
+            plan.PriceUsd = req.PriceUsd;
+            plan.DurationDays = req.DurationDays;
+            plan.MaxDomains = req.MaxDomains;
+            plan.MaxVerificationsPerMonth = req.MaxVerificationsPerMonth;
+            plan.IsPopular = req.IsPopular;
+            plan.Cycle = req.Cycle;
+
+            await _db.SaveChangesAsync();
+            return Ok(new { saved = true });
+        }
+
         [HttpPost("licenses/{id}/revoke")]
         public async Task<IActionResult> Revoke(Guid id)
         {
@@ -604,5 +633,14 @@ namespace VerifyHubPortal.Controllers
         }
 
         public record UpdatePluginBaseDomainRequest(string BaseDomain);
+        public record UpdatePlanRequest(
+            string Name,
+            decimal PriceUsd,
+            BillingCycle Cycle,
+            int DurationDays,
+            int MaxDomains,
+            int MaxVerificationsPerMonth,
+            bool IsPopular
+        );
     }
 }
