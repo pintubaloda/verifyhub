@@ -86,7 +86,10 @@ namespace VerifyHubPortal.Controllers
             return token.Token;
         }
 
-        private static UserDto ToDto(User u) => new(u.Id, u.Name, u.Email, u.Company, u.Role, u.CreatedAt);
+        private static UserDto ToDto(User u) => new(
+            u.Id, u.Name, u.Email, u.Company, u.Role, u.CreatedAt,
+            u.EmailVerified, u.EmailVerifiedAt, u.MobileVerified, u.MobileVerifiedAt, u.VerificationCompletedAt
+        );
     }
 
     // ══════════════════════════════════════════════════════════
@@ -134,7 +137,65 @@ namespace VerifyHubPortal.Controllers
         {
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
-            return Ok(new UserDto(user.Id, user.Name, user.Email, user.Company, user.Role, user.CreatedAt));
+            return Ok(new UserDto(
+                user.Id, user.Name, user.Email, user.Company, user.Role, user.CreatedAt,
+                user.EmailVerified, user.EmailVerifiedAt, user.MobileVerified, user.MobileVerifiedAt, user.VerificationCompletedAt
+            ));
+        }
+
+        [HttpGet("verification-status")]
+        public async Task<IActionResult> VerificationStatus()
+        {
+            var user = await _db.Users.FindAsync(UserId);
+            if (user == null) return NotFound();
+            return Ok(new
+            {
+                userId = user.Id,
+                email = user.Email,
+                emailVerified = user.EmailVerified,
+                emailVerifiedAt = user.EmailVerifiedAt,
+                mobileVerified = user.MobileVerified,
+                mobileVerifiedAt = user.MobileVerifiedAt,
+                verificationCompletedAt = user.VerificationCompletedAt
+            });
+        }
+
+        [HttpPost("verification-status/email-complete")]
+        public async Task<IActionResult> MarkEmailVerified([FromBody] MarkEmailVerifiedRequest req)
+        {
+            var user = await _db.Users.FindAsync(UserId);
+            if (user == null) return NotFound();
+
+            if (!string.IsNullOrWhiteSpace(req.Email))
+            {
+                var normalized = req.Email.Trim().ToLowerInvariant();
+                if (!string.Equals(normalized, user.Email, StringComparison.OrdinalIgnoreCase))
+                    return BadRequest(new { error = "Email does not match logged-in user email." });
+            }
+
+            user.EmailVerified = true;
+            user.EmailVerifiedAt = DateTime.UtcNow;
+            if (user.MobileVerified && user.VerificationCompletedAt == null)
+                user.VerificationCompletedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+
+            return Ok(new { saved = true, emailVerified = user.EmailVerified, emailVerifiedAt = user.EmailVerifiedAt });
+        }
+
+        [HttpPost("verification-status/mobile-complete")]
+        public async Task<IActionResult> MarkMobileVerified([FromBody] MarkMobileVerifiedRequest req)
+        {
+            var user = await _db.Users.FindAsync(UserId);
+            if (user == null) return NotFound();
+            if (!user.EmailVerified)
+                return BadRequest(new { error = "Complete email verification first." });
+
+            user.MobileVerified = true;
+            user.MobileVerifiedAt = DateTime.UtcNow;
+            user.VerificationCompletedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+
+            return Ok(new { saved = true, mobileVerified = user.MobileVerified, mobileVerifiedAt = user.MobileVerifiedAt, verificationCompletedAt = user.VerificationCompletedAt });
         }
 
         [HttpGet("licenses")]
@@ -217,6 +278,9 @@ namespace VerifyHubPortal.Controllers
             l.Product?.Name ?? "", l.Plan?.Name ?? "",
             l.Status, l.ExpiresAt, l.DaysLeft,
             l.InstalledDomain, l.ActivatedAt, l.VerificationsThisMonth);
+
+        public record MarkEmailVerifiedRequest(string? Email);
+        public record MarkMobileVerifiedRequest(string? SessionId);
     }
 
     // ══════════════════════════════════════════════════════════

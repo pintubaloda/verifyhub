@@ -16,6 +16,7 @@ const isAdminRole = (role) => role === 1 || role === 'Admin'
 function Sidebar({ active, setActive, user, onLogout }) {
   const customerItems = [
     { id:'overview',  icon:'⬛', label:'Overview' },
+    { id:'verify-user', icon:'🧩', label:'Verify User' },
     { id:'licenses',  icon:'🔑', label:'My Licenses' },
     { id:'telemetry', icon:'📡', label:'Telemetry' },
     { id:'orders',    icon:'🛒', label:'Orders' },
@@ -375,6 +376,123 @@ function TelemetryTab() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function VerifyUserTab() {
+  const [status, setStatus] = useState(null)
+  const [emailInput, setEmailInput] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const loadStatus = async () => {
+    setLoading(true)
+    try {
+      const r = await API('/api/portal/verification-status')
+      if (r.ok) {
+        const d = await r.json()
+        setStatus(d)
+        setEmailInput(d.email || '')
+      }
+    } catch {}
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { loadStatus() }, [])
+
+  const sendMagicLink = async () => {
+    try {
+      const r = await fetch('/magiclink/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailInput }),
+      })
+      const d = await r.json()
+      if (!r.ok) toast.error(d.error || 'Failed to send magic link.')
+      else toast.success('Magic link sent. Complete email verification from your inbox.')
+    } catch {
+      toast.error('Failed to send magic link.')
+    }
+  }
+
+  const markEmailDone = async () => {
+    try {
+      const r = await API('/api/portal/verification-status/email-complete', {
+        method: 'POST',
+        body: JSON.stringify({ email: emailInput }),
+      })
+      const d = await r.json()
+      if (!r.ok) toast.error(d.error || 'Failed to mark email step.')
+      else { toast.success('Email step completed.'); loadStatus() }
+    } catch {
+      toast.error('Failed to mark email step.')
+    }
+  }
+
+  const markMobileDone = async () => {
+    try {
+      const r = await API('/api/portal/verification-status/mobile-complete', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId: null }),
+      })
+      const d = await r.json()
+      if (!r.ok) toast.error(d.error || 'Failed to mark mobile step.')
+      else { toast.success('Mobile step completed. User is fully verified.'); loadStatus() }
+    } catch {
+      toast.error('Failed to mark mobile step.')
+    }
+  }
+
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Verify User</h2>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
+        <div style={{ fontSize:13, color:'#5A6A8A', marginBottom:12 }}>Current status</div>
+        {loading ? (
+          <div style={{ color:'#5A6A8A' }}>Loading...</div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:10, fontSize:13, color:'#5A6A8A' }}>
+            <div>Email: <strong style={{ color:'#F0F4FF' }}>{status?.email || '-'}</strong></div>
+            <div>Email Verified: <strong style={{ color: status?.emailVerified ? '#00C896' : '#FF4D6A' }}>{status?.emailVerified ? 'Yes' : 'No'}</strong></div>
+            <div>Mobile Verified: <strong style={{ color: status?.mobileVerified ? '#00C896' : '#FF4D6A' }}>{status?.mobileVerified ? 'Yes' : 'No'}</strong></div>
+            <div>Final Status: <strong style={{ color: status?.verificationCompletedAt ? '#00C896' : '#FFB300' }}>{status?.verificationCompletedAt ? 'Verified' : 'Pending'}</strong></div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Step 1: Email Verification (Plugin UI)</h3>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:10 }}>
+          <input
+            value={emailInput}
+            onChange={e => setEmailInput(e.target.value)}
+            placeholder="user email"
+            style={{ minWidth:280, background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'10px 12px', borderRadius:10, fontSize:13 }}
+          />
+          <button onClick={sendMagicLink} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'linear-gradient(135deg,#4F8FFF,#B06AFF)', color:'#fff', fontWeight:700, cursor:'pointer' }}>
+            Send Magic Link
+          </button>
+          <a href="/magiclink/verify" target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
+            Open Email Plugin UI
+          </a>
+          <button onClick={markEmailDone} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'#162040', color:'#fff', fontWeight:700, cursor:'pointer' }}>
+            Mark Email Completed
+          </button>
+        </div>
+      </div>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Step 2: Mobile QR Verification (Plugin UI)</h3>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+          <a href="/mobileverify" target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
+            Open Mobile QR Plugin UI
+          </a>
+          <button onClick={markMobileDone} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'#162040', color:'#fff', fontWeight:700, cursor:'pointer' }}>
+            Mark Mobile Completed
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -861,6 +979,7 @@ export default function DashboardPage() {
       <Sidebar active={active} setActive={setActive} user={user} onLogout={logout} />
       <main style={{ marginLeft:240, flex:1, padding:'32px 40px', overflowY:'auto' }}>
         {!isAdmin && active === 'overview'  && <OverviewTab  stats={stats} />}
+        {!isAdmin && active === 'verify-user' && <VerifyUserTab />}
         {!isAdmin && active === 'licenses'  && <LicensesTab  licenses={licenses} onRefresh={loadData} />}
         {!isAdmin && active === 'telemetry' && <TelemetryTab />}
         {!isAdmin && active === 'orders'    && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Orders coming soon</div>}

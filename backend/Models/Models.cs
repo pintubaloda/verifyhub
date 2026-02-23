@@ -17,6 +17,11 @@ namespace VerifyHubPortal.Models
         public DateTime CreatedAt  { get; set; } = DateTime.UtcNow;
         public string? Company     { get; set; }
         public string? AvatarUrl   { get; set; }
+        public bool EmailVerified  { get; set; } = false;
+        public DateTime? EmailVerifiedAt { get; set; }
+        public bool MobileVerified { get; set; } = false;
+        public DateTime? MobileVerifiedAt { get; set; }
+        public DateTime? VerificationCompletedAt { get; set; }
         public ICollection<License> Licenses { get; set; } = new List<License>();
         public ICollection<Order>   Orders   { get; set; } = new List<Order>();
     }
@@ -179,7 +184,19 @@ namespace VerifyHubPortal.Models
     public record ValidateLicenseRequest(string LicenseKey, string Domain);
     public record RenewLicenseRequest(Guid LicenseId);
 
-    public record UserDto(Guid Id, string Name, string Email, string? Company, UserRole Role, DateTime CreatedAt);
+    public record UserDto(
+        Guid Id,
+        string Name,
+        string Email,
+        string? Company,
+        UserRole Role,
+        DateTime CreatedAt,
+        bool EmailVerified,
+        DateTime? EmailVerifiedAt,
+        bool MobileVerified,
+        DateTime? MobileVerifiedAt,
+        DateTime? VerificationCompletedAt
+    );
     public record LicenseDto(Guid Id, string Key, string KeyPrefix, string ProductName, string PlanName,
         LicenseStatus Status, DateTime ExpiresAt, int DaysLeft, string? InstalledDomain,
         DateTime? ActivatedAt, int VerificationsThisMonth);

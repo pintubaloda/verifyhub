@@ -90,6 +90,7 @@ using (var scope = app.Services.CreateScope())
     var keyGen = scope.ServiceProvider.GetRequiredService<ILicenseKeyGenerator>();
     var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("PlatformBootstrap");
     db.Database.EnsureCreated();
+    await EnsureUserVerificationColumnsAsync(db);
     await EnsurePlatformSettingsTableAsync(db);
     await EnsurePlatformLifetimeLicensesAsync(db, cfg, keyGen, log);
     await EnsureBootstrapAdminAsync(scope.ServiceProvider, db);
@@ -117,6 +118,25 @@ static async Task EnsurePlatformSettingsTableAsync(AppDbContext db)
             "Value" TEXT NOT NULL
         );
     """);
+}
+
+static async Task EnsureUserVerificationColumnsAsync(AppDbContext db)
+{
+    if (db.Database.IsNpgsql())
+    {
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "EmailVerified" boolean NOT NULL DEFAULT FALSE;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "EmailVerifiedAt" timestamp with time zone NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "MobileVerified" boolean NOT NULL DEFAULT FALSE;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "MobileVerifiedAt" timestamp with time zone NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "VerificationCompletedAt" timestamp with time zone NULL;""");
+        return;
+    }
+
+    try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "EmailVerified" INTEGER NOT NULL DEFAULT 0;"""); } catch { }
+    try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "EmailVerifiedAt" TEXT NULL;"""); } catch { }
+    try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "MobileVerified" INTEGER NOT NULL DEFAULT 0;"""); } catch { }
+    try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "MobileVerifiedAt" TEXT NULL;"""); } catch { }
+    try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "VerificationCompletedAt" TEXT NULL;"""); } catch { }
 }
 
 static async Task EnsurePlatformLifetimeLicensesAsync(
