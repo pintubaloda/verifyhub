@@ -1,0 +1,38 @@
+databases:
+  - name: verifyhub-postgres
+    databaseName: verifyhub
+    user: verifyhub
+
+services:
+  - type: web
+    name: verifyhub-api
+    runtime: dotnet
+    rootDir: backend
+    buildCommand: dotnet restore && dotnet publish -c Release -o out
+    startCommand: dotnet out/VerifyHubPortal.dll
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: verifyhub-postgres
+          property: connectionString
+      - key: Jwt__Secret
+        generateValue: true
+      - key: Jwt__PluginSecret
+        generateValue: true
+      - key: VerifyHub__LicenseHmacSecret
+        generateValue: true
+
+  - type: web
+    name: verifyhub-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: verifyhub-api
+          type: web
+          property: url
