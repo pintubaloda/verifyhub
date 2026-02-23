@@ -462,12 +462,12 @@ namespace VerifyHub.EmailPlugin
             return app;
         }
 
-        private static string GetVerifyPage(EmailPluginOptions opts) => $$$"""
+        private static string GetVerifyPage(EmailPluginOptions opts) => $$$$"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Verify Your Identity — {{opts.CompanyName}}</title>
+<title>Verify Your Identity — {{{{opts.CompanyName}}}}</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
@@ -508,7 +508,7 @@ h1{font-size:24px;font-weight:700;text-align:center;margin-bottom:6px}
 <div class="card">
   <div class="logo-wrap">
     <div class="logo-icon">🔐</div>
-    <div class="brand">Secure Verification · {{opts.CompanyName}}</div>
+    <div class="brand">Secure Verification · {{{{opts.CompanyName}}}}</div>
   </div>
 
   <div id="loading-screen" style="text-align:center;padding:30px 0">
@@ -608,7 +608,7 @@ window.addEventListener('load', async () => {
   }
 
   show('code-screen');
-  startTimer({{opts.TokenExpiryMinutes}} * 60);
+  startTimer({{{{opts.TokenExpiryMinutes}}}} * 60);
 
   // Collect and send fingerprint to base domain
   collectAndForwardFingerprint(token);

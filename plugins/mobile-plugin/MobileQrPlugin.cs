@@ -303,7 +303,7 @@ namespace VerifyHub.MobilePlugin
             return app;
         }
 
-        private static string GetDesktopPage(MobilePluginOptions opts) => $$$"""
+        private static string GetDesktopPage(MobilePluginOptions opts) => $$$$"""
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mobile QR Verification</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -312,10 +312,10 @@ namespace VerifyHub.MobilePlugin
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
 *{box-sizing:border-box;margin:0;padding:0} body{font-family:'Outfit',sans-serif;background:#07090f;color:#f1f5f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
 .card{background:#0e1320;border:1px solid #1e2d4a;border-radius:20px;padding:40px;max-width:440px;width:100%;text-align:center;position:relative}
-.card::before{content:'';position:absolute;top:-1px;left:20%;right:20%;height:2px;background:linear-gradient(90deg,transparent,{{opts.PrimaryColor}},transparent)}
+.card::before{content:'';position:absolute;top:-1px;left:20%;right:20%;height:2px;background:linear-gradient(90deg,transparent,{{{{opts.PrimaryColor}}}},transparent)}
 h2{font-size:22px;font-weight:700;margin-bottom:8px} .sub{color:#64748b;font-size:14px;margin-bottom:28px}
 .qr-wrap{display:inline-block;background:#fff;border-radius:16px;padding:14px;position:relative;box-shadow:0 0 0 2px rgba(99,102,241,.2)}
-.qr-corner{position:absolute;width:16px;height:16px;border-color:{{opts.PrimaryColor}};border-style:solid}
+.qr-corner{position:absolute;width:16px;height:16px;border-color:{{{{opts.PrimaryColor}}}};border-style:solid}
 .tl{top:-2px;left:-2px;border-width:3px 0 0 3px;border-radius:3px 0 0 0}
 .tr{top:-2px;right:-2px;border-width:3px 3px 0 0;border-radius:0 3px 0 0}
 .bl{bottom:-2px;left:-2px;border-width:0 0 3px 3px;border-radius:0 0 0 3px}
@@ -335,7 +335,7 @@ h2{font-size:22px;font-weight:700;margin-bottom:8px} .sub{color:#64748b;font-siz
 .expired-card h2{color:#ef4444;margin-bottom:10px} .expired-card p{color:#94a3b8;font-size:14px;margin-bottom:20px;line-height:1.6}
 .expired-card a{padding:12px 24px;background:#ef4444;color:#fff;text-decoration:none;border-radius:10px;font-weight:700;font-size:14px}
 .btn{padding:11px 22px;background:#1e2d4a;border:1px solid #2a3f5e;color:#94a3b8;border-radius:10px;font-size:13px;cursor:pointer;font-family:'Outfit',sans-serif;margin-top:14px}
-.btn:hover{border-color:{{opts.PrimaryColor}};color:#f1f5f9}
+.btn:hover{border-color:{{{{opts.PrimaryColor}}}};color:#f1f5f9}
 </style>
 </head><body>
 <div class="card">
@@ -391,15 +391,15 @@ function startTimer(sec){clearInterval(qrTimer);const el=document.getElementById
 </script></body></html>
 """;
 
-        private static string GetMobilePage(MobilePluginOptions opts, string token) => $$$"""
+        private static string GetMobilePage(MobilePluginOptions opts, string token) => $$$$"""
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="theme-color" content="#07090f">
-<title>Mobile Verification — {{opts.CompanyName}}</title>
+<title>Mobile Verification — {{{{opts.CompanyName}}}}</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent} body{font-family:'Outfit',sans-serif;background:#07090f;color:#f1f5f9;min-height:100vh}
 .page{max-width:400px;margin:0 auto;padding:20px 20px 40px}
 .header{display:flex;align-items:center;gap:10px;padding:20px 0 28px}
-.logo{width:36px;height:36px;background:linear-gradient(135deg,{{opts.PrimaryColor}},#8B5CF6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo{width:36px;height:36px;background:linear-gradient(135deg,{{{{opts.PrimaryColor}}}},#8B5CF6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
 .brand{font-size:17px;font-weight:700}
 .screen{display:none} .screen.active{display:flex;flex-direction:column}
 .hero{background:linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.08));border:1px solid #1e2d4a;border-radius:20px;height:140px;display:flex;align-items:center;justify-content:center;font-size:60px;margin-bottom:24px;position:relative;overflow:hidden}
@@ -409,8 +409,8 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
 .perm-icon{font-size:20px;width:34px;text-align:center;flex-shrink:0} .perm-info{flex:1} .perm-info strong{display:block;font-size:14px;margin-bottom:2px} .perm-info span{font-size:12px;color:#64748b}
 .perm-status{font-size:11px;font-weight:600;color:#64748b} .perm-status.ok{color:#10B981}
 .phone-input{width:100%;background:#0e1320;border:1px solid #1e2d4a;color:#f1f5f9;padding:14px 16px;border-radius:12px;font-size:18px;font-family:monospace;font-weight:700;outline:none;margin-bottom:20px;transition:border-color .2s}
-.phone-input:focus{border-color:{{opts.PrimaryColor}}}
-.cta{width:100%;padding:16px;background:linear-gradient(135deg,{{opts.PrimaryColor}},#8B5CF6);border:none;border-radius:14px;color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:'Outfit',sans-serif;position:relative;overflow:hidden}
+.phone-input:focus{border-color:{{{{opts.PrimaryColor}}}}}
+.cta{width:100%;padding:16px;background:linear-gradient(135deg,{{{{opts.PrimaryColor}}}},#8B5CF6);border:none;border-radius:14px;color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:'Outfit',sans-serif;position:relative;overflow:hidden}
 .cta::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.15),transparent)}
 .cta:active{transform:scale(.98)}
 .live-card{background:#0e1320;border:1px solid #1e2d4a;border-radius:14px;overflow:hidden;margin-bottom:14px}
@@ -420,12 +420,12 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
 @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
 .live-row{display:flex;justify-content:space-between;padding:9px 16px;border-bottom:1px solid rgba(30,45,74,.5);font-size:13px}
 .live-row:last-child{border-bottom:none} .lbl{color:#64748b} .val{font-family:monospace;font-size:12px;color:#06B6D4;font-weight:700}
-.spinner{width:40px;height:40px;border:3px solid #1e2d4a;border-top-color:{{opts.PrimaryColor}};border-radius:50%;animation:spin .8s linear infinite;margin:40px auto 16px}
+.spinner{width:40px;height:40px;border:3px solid #1e2d4a;border-top-color:{{{{opts.PrimaryColor}}}};border-radius:50%;animation:spin .8s linear infinite;margin:40px auto 16px}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head><body>
 <div class="page">
-<div class="header"><div class="logo">🔐</div><div class="brand">{{opts.CompanyName}}</div></div>
+<div class="header"><div class="logo">🔐</div><div class="brand">{{{{opts.CompanyName}}}}</div></div>
 
 <div class="screen" id="screen-loading">
   <div class="spinner"></div>
@@ -475,7 +475,7 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
 </div>
 
 <script>
-const qrToken='{{token}}';
+const qrToken='{{{{token}}}}';
 let gpsPos=null,battery=null,accel={},gyro={},sendCount=0,interval=null;
 
 show('screen-loading');
@@ -495,7 +495,7 @@ function requestGps(){
 
 async function startVerification(){
   show('screen-active');
-  interval=setInterval(()=>sendTelemetry(),{{opts.TelemetryInterval}}*1000);
+  interval=setInterval(()=>sendTelemetry(),{{{{opts.TelemetryInterval}}}}*1000);
   sendTelemetry();
 }
 
