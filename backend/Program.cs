@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using VerifyHub.EmailPlugin;
+using VerifyHub.MobilePlugin;
 using VerifyHubPortal.Data;
 using VerifyHubPortal.Models;
 using VerifyHubPortal.Services;
@@ -65,6 +67,8 @@ builder.Services.AddSingleton<ILicenseKeyGenerator, LicenseKeyGenerator>();
 builder.Services.AddSingleton<ITokenService,        TokenService>();
 builder.Services.AddSingleton<IPluginAuthService,   PluginAuthService>();
 builder.Services.AddScoped<ILicenseService,         LicenseService>();
+builder.Services.AddEmailVerifyPlugin(builder.Configuration);
+builder.Services.AddMobileQrPlugin(builder.Configuration);
 
 // ── Controllers + SignalR ─────────────────────────────────────────────────
 builder.Services.AddControllers();
@@ -100,7 +104,10 @@ app.UseCors("frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseStaticFiles();
+app.UseEmailVerifyPlugin();
+app.UseMobileQrPlugin();
 app.MapControllers();
+app.MapHub<MobileQrHub>("/mobilehub");
 
 // Health check
 app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTime.UtcNow }));
