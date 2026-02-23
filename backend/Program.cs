@@ -87,6 +87,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+    await EnsurePlatformSettingsTableAsync(db);
     await EnsureBootstrapAdminAsync(scope.ServiceProvider, db);
 }
 
@@ -104,14 +105,29 @@ app.MapFallbackToFile("index.html");
 
 app.Run();
 
+static async Task EnsurePlatformSettingsTableAsync(AppDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS "PlatformSettings" (
+            "Key" TEXT PRIMARY KEY,
+            "Value" TEXT NOT NULL
+        );
+    """);
+}
+
 static async Task EnsureBootstrapAdminAsync(IServiceProvider services, AppDbContext db)
 {
     var email = Environment.GetEnvironmentVariable("ADMIN_EMAIL")?.Trim().ToLowerInvariant();
     var password = Environment.GetEnvironmentVariable("ADMIN_PASSWORD");
     var name = Environment.GetEnvironmentVariable("ADMIN_NAME")?.Trim();
+    var resetPassword = string.Equals(
+        Environment.GetEnvironmentVariable("ADMIN_RESET_PASSWORD"),
+        "true",
+        StringComparison.OrdinalIgnoreCase
+    );
     var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("AdminBootstrap");
 
-    if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+    if (string.IsNullOrWhiteSpace(email))
     {
         return;
     }
@@ -119,6 +135,12 @@ static async Task EnsureBootstrapAdminAsync(IServiceProvider services, AppDbCont
     var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
     if (user == null)
     {
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            logger.LogWarning("ADMIN_EMAIL is set but ADMIN_PASSWORD is missing. Admin bootstrap skipped.");
+            return;
+        }
+
         user = new User
         {
             Name = string.IsNullOrWhiteSpace(name) ? "Admin" : name,
@@ -140,7 +162,7 @@ static async Task EnsureBootstrapAdminAsync(IServiceProvider services, AppDbCont
         changed = true;
     }
 
-    if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+    if (resetPassword && !string.IsNullOrWhiteSpace(password) && !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
     {
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
         changed = true;

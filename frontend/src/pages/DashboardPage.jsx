@@ -26,6 +26,7 @@ function Sidebar({ active, setActive, user, onLogout }) {
     { id:'admin-users',     icon:'👥', label:'Users' },
     { id:'admin-licenses',  icon:'🔑', label:'Licenses' },
     { id:'admin-telemetry', icon:'📡', label:'Telemetry' },
+    { id:'admin-plugin-settings', icon:'⚙️', label:'Plugin Settings' },
   ]
   const items = isAdminRole(user?.role) ? adminItems : customerItems
   return (
@@ -484,6 +485,123 @@ function AdminTelemetryTab() {
   )
 }
 
+function AdminPluginSettingsTab({ settings, onRefresh }) {
+  const plugins = settings?.plugins ?? []
+  const defaults = settings?.defaults
+  const security = settings?.security
+  const [baseDomain, setBaseDomain] = useState(defaults?.baseDomain || '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setBaseDomain(defaults?.baseDomain || '')
+  }, [defaults?.baseDomain])
+
+  const saveBaseDomain = async () => {
+    setSaving(true)
+    try {
+      const r = await API('/api/admin/plugin-settings/base-domain', {
+        method: 'POST',
+        body: JSON.stringify({ baseDomain }),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        toast.error(d.error || 'Failed to save base domain.')
+      } else {
+        toast.success('Plugin base domain updated.')
+        onRefresh?.()
+      }
+    } catch {
+      toast.error('Network error while saving base domain.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Plugin Settings</h2>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Platform Defaults</h3>
+        <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:14, flexWrap:'wrap' }}>
+          <input
+            value={baseDomain}
+            onChange={e => setBaseDomain(e.target.value)}
+            placeholder="https://api.verifyhub.io"
+            style={{
+              minWidth: 320,
+              background:'#050810',
+              border:'1px solid #162040',
+              color:'#F0F4FF',
+              padding:'10px 12px',
+              borderRadius:10,
+              fontSize:13,
+              fontFamily:'DM Sans,sans-serif',
+            }}
+          />
+          <button
+            onClick={saveBaseDomain}
+            disabled={saving}
+            style={{
+              padding:'10px 14px',
+              borderRadius:10,
+              border:'none',
+              cursor: saving ? 'not-allowed' : 'pointer',
+              background: saving ? '#162040' : 'linear-gradient(135deg,#4F8FFF,#B06AFF)',
+              color:'#fff',
+              fontSize:13,
+              fontWeight:700,
+              fontFamily:'Syne,sans-serif',
+            }}
+          >
+            {saving ? 'Saving...' : 'Save Base Domain'}
+          </button>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:10, fontSize:13, color:'#5A6A8A' }}>
+          <div>Base Domain: <strong style={{ color:'#F0F4FF' }}>{defaults?.baseDomain || '-'}</strong></div>
+          <div>Email Token Expiry: <strong style={{ color:'#F0F4FF' }}>{defaults?.emailTokenExpiryMinutes ?? '-'} min</strong></div>
+          <div>Mobile Telemetry Interval: <strong style={{ color:'#F0F4FF' }}>{defaults?.mobileTelemetryIntervalSeconds ?? '-'} sec</strong></div>
+          <div>Mobile QR Expiry: <strong style={{ color:'#F0F4FF' }}>{defaults?.mobileQrExpiryMinutes ?? '-'} min</strong></div>
+        </div>
+      </div>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Security Status</h3>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:10, fontSize:13, color:'#5A6A8A' }}>
+          <div>JWT Secret: <strong style={{ color: security?.jwtSecretConfigured ? '#00C896' : '#FF4D6A' }}>{security?.jwtSecretConfigured ? 'Configured' : 'Missing'}</strong></div>
+          <div>Plugin JWT Secret: <strong style={{ color: security?.pluginSecretConfigured ? '#00C896' : '#FF4D6A' }}>{security?.pluginSecretConfigured ? 'Configured' : 'Missing'}</strong></div>
+          <div>License HMAC Secret: <strong style={{ color: security?.licenseHmacConfigured ? '#00C896' : '#FF4D6A' }}>{security?.licenseHmacConfigured ? 'Configured' : 'Missing'}</strong></div>
+          <div>Admin Bootstrap Email: <strong style={{ color:'#F0F4FF' }}>{security?.adminBootstrapEmail || '-'}</strong></div>
+        </div>
+      </div>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Plugin Catalog & Plans</h3>
+        {!plugins.length ? (
+          <div style={{ color:'#5A6A8A' }}>No plugin products found.</div>
+        ) : plugins.map(p => (
+          <div key={p.id} style={{ border:'1px solid #162040', borderRadius:12, padding:14, marginBottom:10, background:'#050810' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+              <div style={{ fontFamily:'Syne,sans-serif', fontWeight:700 }}>{p.name}</div>
+              <div style={{ color:'#5A6A8A', fontSize:12 }}>{p.slug}</div>
+            </div>
+            <div style={{ color:'#5A6A8A', fontSize:13, margin:'6px 0 10px' }}>{p.description}</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:8 }}>
+              {(p.plans || []).map(pl => (
+                <div key={pl.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:10, padding:10 }}>
+                  <div style={{ fontWeight:700, color:'#F0F4FF', fontSize:13 }}>{pl.name}</div>
+                  <div style={{ color:'#5A6A8A', fontSize:12 }}>${pl.priceUsd} · {pl.cycle}</div>
+                  <div style={{ color:'#5A6A8A', fontSize:12 }}>Domains: {pl.maxDomains} · Monthly: {pl.maxVerificationsPerMonth}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Main Dashboard ────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [active, setActive] = useState('overview')
@@ -493,6 +611,7 @@ export default function DashboardPage() {
   const [adminStats, setAdminStats] = useState(null)
   const [adminUsers, setAdminUsers] = useState(null)
   const [adminLicenses, setAdminLicenses] = useState(null)
+  const [adminPluginSettings, setAdminPluginSettings] = useState(null)
   const nav = useNavigate()
   const isAdmin = isAdminRole(user?.role)
 
@@ -516,6 +635,8 @@ export default function DashboardPage() {
         if (sR.ok) setAdminStats(await sR.json())
         if (uR.ok) setAdminUsers(await uR.json())
         if (lR.ok) setAdminLicenses(await lR.json())
+        const pR = await API('/api/admin/plugin-settings')
+        if (pR.ok) setAdminPluginSettings(await pR.json())
       }
       else
       {
@@ -547,6 +668,7 @@ export default function DashboardPage() {
         {isAdmin && active === 'admin-users'     && <AdminUsersTab users={adminUsers} />}
         {isAdmin && active === 'admin-licenses'  && <AdminLicensesTab licenses={adminLicenses} />}
         {isAdmin && active === 'admin-telemetry' && <AdminTelemetryTab />}
+        {isAdmin && active === 'admin-plugin-settings' && <AdminPluginSettingsTab settings={adminPluginSettings} onRefresh={() => loadData(user)} />}
       </main>
     </div>
   )

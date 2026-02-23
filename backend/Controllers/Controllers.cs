@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Data;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -375,10 +376,13 @@ namespace VerifyHubPortal.Controllers
     [ApiController, Route("api/admin"), Authorize(Roles = "Admin")]
     public class AdminController : ControllerBase
     {
+        private const string PluginBaseDomainSettingKey = "plugins.baseDomain";
         private readonly AppDbContext _db;
         private readonly ILicenseService _licenseSvc;
+        private readonly IConfiguration _cfg;
 
-        public AdminController(AppDbContext db, ILicenseService ls) { _db = db; _licenseSvc = ls; }
+        public AdminController(AppDbContext db, ILicenseService ls, IConfiguration cfg)
+        { _db = db; _licenseSvc = ls; _cfg = cfg; }
 
         [HttpGet("stats")]
         public async Task<IActionResult> Stats()
@@ -430,6 +434,82 @@ namespace VerifyHubPortal.Controllers
             return Ok(new { total, items });
         }
 
+        [HttpGet("plugin-settings")]
+        public async Task<IActionResult> PluginSettings()
+        {
+            var baseDomain = await GetSettingAsync(PluginBaseDomainSettingKey)
+                ?? _cfg["VerifyHub:BaseDomain"]
+                ?? "https://api.verifyhub.io";
+
+            var products = await _db.Products
+                .Include(p => p.Plans)
+                .Where(p => p.IsActive)
+                .OrderBy(p => p.Name)
+                .ToListAsync();
+
+            var defaults = new
+            {
+                baseDomain,
+                emailPrimaryColor = "#6366F1",
+                mobilePrimaryColor = "#6366F1",
+                mobileTelemetryIntervalSeconds = 5,
+                mobileQrExpiryMinutes = 5,
+                emailTokenExpiryMinutes = 15
+            };
+
+            var security = new
+            {
+                jwtSecretConfigured = !string.IsNullOrWhiteSpace(_cfg["Jwt:Secret"]),
+                pluginSecretConfigured = !string.IsNullOrWhiteSpace(_cfg["Jwt:PluginSecret"]),
+                licenseHmacConfigured = !string.IsNullOrWhiteSpace(_cfg["VerifyHub:LicenseHmacSecret"]),
+                adminBootstrapEmail = Environment.GetEnvironmentVariable("ADMIN_EMAIL")
+            };
+
+            return Ok(new
+            {
+                defaults,
+                security,
+                plugins = products.Select(p => new
+                {
+                    p.Id,
+                    p.Name,
+                    p.Slug,
+                    p.Description,
+                    plans = p.Plans
+                        .OrderBy(pl => pl.PriceUsd)
+                        .Select(pl => new
+                        {
+                            pl.Id,
+                            pl.Name,
+                            pl.PriceUsd,
+                            pl.Cycle,
+                            pl.DurationDays,
+                            pl.MaxDomains,
+                            pl.MaxVerificationsPerMonth,
+                            pl.IsPopular
+                        })
+                })
+            });
+        }
+
+        [HttpPost("plugin-settings/base-domain")]
+        public async Task<IActionResult> SetPluginBaseDomain([FromBody] UpdatePluginBaseDomainRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.BaseDomain))
+                return BadRequest(new { error = "Base domain is required." });
+
+            if (!Uri.TryCreate(req.BaseDomain, UriKind.Absolute, out var uri))
+                return BadRequest(new { error = "Base domain must be a valid absolute URL." });
+
+            if (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+                return BadRequest(new { error = "Base domain must start with http:// or https://." });
+
+            var normalized = $"{uri.Scheme}://{uri.Host}{(uri.IsDefaultPort ? "" : ":" + uri.Port)}".TrimEnd('/');
+            await SetSettingAsync(PluginBaseDomainSettingKey, normalized);
+
+            return Ok(new { saved = true, baseDomain = normalized });
+        }
+
         [HttpPost("licenses/{id}/revoke")]
         public async Task<IActionResult> Revoke(Guid id)
         {
@@ -446,5 +526,83 @@ namespace VerifyHubPortal.Controllers
             await _licenseSvc.ExpireOverdueAsync();
             return Ok(new { done = true });
         }
+
+        private async Task EnsureSettingsTableAsync()
+        {
+            await _db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS "PlatformSettings" (
+                    "Key" TEXT PRIMARY KEY,
+                    "Value" TEXT NOT NULL
+                );
+            """);
+        }
+
+        private async Task<string?> GetSettingAsync(string key)
+        {
+            await EnsureSettingsTableAsync();
+            var conn = _db.Database.GetDbConnection();
+            var closeAfter = conn.State != ConnectionState.Open;
+            if (closeAfter) await conn.OpenAsync();
+
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """SELECT "Value" FROM "PlatformSettings" WHERE "Key" = @key LIMIT 1;""";
+                var param = cmd.CreateParameter();
+                param.ParameterName = "@key";
+                param.Value = key;
+                cmd.Parameters.Add(param);
+                var value = await cmd.ExecuteScalarAsync();
+                return value == null || value == DBNull.Value ? null : value.ToString();
+            }
+            finally
+            {
+                if (closeAfter) await conn.CloseAsync();
+            }
+        }
+
+        private async Task SetSettingAsync(string key, string value)
+        {
+            await EnsureSettingsTableAsync();
+            var conn = _db.Database.GetDbConnection();
+            var closeAfter = conn.State != ConnectionState.Open;
+            if (closeAfter) await conn.OpenAsync();
+
+            try
+            {
+                await using var update = conn.CreateCommand();
+                update.CommandText = """UPDATE "PlatformSettings" SET "Value" = @value WHERE "Key" = @key;""";
+                var upKey = update.CreateParameter();
+                upKey.ParameterName = "@key";
+                upKey.Value = key;
+                update.Parameters.Add(upKey);
+                var upValue = update.CreateParameter();
+                upValue.ParameterName = "@value";
+                upValue.Value = value;
+                update.Parameters.Add(upValue);
+                var rows = await update.ExecuteNonQueryAsync();
+
+                if (rows == 0)
+                {
+                    await using var insert = conn.CreateCommand();
+                    insert.CommandText = """INSERT INTO "PlatformSettings" ("Key", "Value") VALUES (@key, @value);""";
+                    var inKey = insert.CreateParameter();
+                    inKey.ParameterName = "@key";
+                    inKey.Value = key;
+                    insert.Parameters.Add(inKey);
+                    var inValue = insert.CreateParameter();
+                    inValue.ParameterName = "@value";
+                    inValue.Value = value;
+                    insert.Parameters.Add(inValue);
+                    await insert.ExecuteNonQueryAsync();
+                }
+            }
+            finally
+            {
+                if (closeAfter) await conn.CloseAsync();
+            }
+        }
+
+        public record UpdatePluginBaseDomainRequest(string BaseDomain);
     }
 }
