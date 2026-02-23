@@ -24,6 +24,7 @@
  */
 
 using System.Collections.Concurrent;
+using System.Data;
 using System.Net;
 using System.Net.Mail;
 using System.Security.Cryptography;
@@ -39,6 +40,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
+using VerifyHubPortal.Data;
+using VerifyHubPortal.Models;
 
 namespace VerifyHub.EmailPlugin
 {
@@ -126,15 +130,27 @@ namespace VerifyHub.EmailPlugin
         private readonly ConcurrentDictionary<string, TokenRecord> _tokens = new();
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
         private readonly ILogger _log;
+        private readonly IServiceScopeFactory _scopeFactory;
+        private readonly IConfiguration _cfg;
         private string _licenseDomain = "unknown";
 
-        public EmailVerifyService(IOptions<EmailPluginOptions> opts, ILogger<EmailVerifyService> log)
-        { _opts = opts.Value; _log = log; }
+        public EmailVerifyService(
+            IOptions<EmailPluginOptions> opts,
+            ILogger<EmailVerifyService> log,
+            IServiceScopeFactory scopeFactory,
+            IConfiguration cfg)
+        {
+            _opts = opts.Value;
+            _log = log;
+            _scopeFactory = scopeFactory;
+            _cfg = cfg;
+        }
 
         public LicenseState LicenseState => _state;
 
         public async Task EnsureLicenseReadyAsync(string domain, string version, string serverInfo)
         {
+            await ApplyPlatformOverridesAsync();
             domain = NormalizeDomain(domain);
             var recent = (DateTime.UtcNow - _state.LastCheck) < TimeSpan.FromMinutes(5);
             if (!_state.IsValid || !string.Equals(_licenseDomain, domain, StringComparison.OrdinalIgnoreCase))
@@ -152,6 +168,7 @@ namespace VerifyHub.EmailPlugin
         // Called on startup: validate license, register domain
         public async Task InitAsync(string domain, string version, string serverInfo)
         {
+            await ApplyPlatformOverridesAsync();
             domain = NormalizeDomain(domain);
             try
             {
@@ -193,6 +210,7 @@ namespace VerifyHub.EmailPlugin
         // Periodically re-validate license (every 1 hour)
         public async Task RefreshLicenseAsync(string domain)
         {
+            await ApplyPlatformOverridesAsync();
             domain = NormalizeDomain(domain);
             try
             {
@@ -337,6 +355,103 @@ namespace VerifyHub.EmailPlugin
         private static bool ConstantEquals(string a, string b) { if (a.Length != b.Length) return false; int d = 0; for (int i = 0; i < a.Length; i++) d |= a[i] ^ b[i]; return d == 0; }
         private static string ParseBrowser(string ua) { if (ua.Contains("Chrome/")) return "Chrome"; if (ua.Contains("Firefox/")) return "Firefox"; if (ua.Contains("Safari/")) return "Safari"; return "Other"; }
         private static string ParseOs(string ua) { if (ua.Contains("Windows")) return "Windows"; if (ua.Contains("Android")) return "Android"; if (ua.Contains("iPhone") || ua.Contains("iPad")) return "iOS"; if (ua.Contains("Mac OS X")) return "macOS"; return "Other"; }
+        public string GetRenewUrl(HttpContext? ctx = null)
+        {
+            var configured = Environment.GetEnvironmentVariable("PLATFORM_DASHBOARD_URL")
+                ?? _cfg["VerifyHub:DashboardUrl"];
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                var s = configured.Trim().TrimEnd('/');
+                return s.EndsWith("/dashboard", StringComparison.OrdinalIgnoreCase) ? s : $"{s}/dashboard";
+            }
+
+            if (Uri.TryCreate(_opts.BaseDomain, UriKind.Absolute, out var baseUri))
+            {
+                var authority = baseUri.IsDefaultPort ? baseUri.Host : $"{baseUri.Host}:{baseUri.Port}";
+                return $"{baseUri.Scheme}://{authority}/dashboard";
+            }
+
+            if (ctx != null)
+            {
+                return $"{ctx.Request.Scheme}://{ctx.Request.Host}/dashboard";
+            }
+
+            return "/dashboard";
+        }
+
+        private async Task ApplyPlatformOverridesAsync()
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetService<AppDbContext>();
+                if (db == null) return;
+
+                var configuredBase = await GetSettingAsync(db, "plugins.baseDomain");
+                if (!string.IsNullOrWhiteSpace(configuredBase) &&
+                    Uri.TryCreate(configuredBase, UriKind.Absolute, out var baseUri))
+                {
+                    _opts.BaseDomain = $"{baseUri.Scheme}://{baseUri.Host}{(baseUri.IsDefaultPort ? "" : ":" + baseUri.Port)}";
+                }
+
+                var ownerEmail = (Environment.GetEnvironmentVariable("PLATFORM_OWNER_EMAIL")
+                    ?? "platform@verifyhub.local").Trim().ToLowerInvariant();
+
+                var license = await db.Licenses
+                    .Include(l => l.User)
+                    .Where(l =>
+                        l.KeyPrefix == "EML" &&
+                        l.User != null &&
+                        l.User.Email == ownerEmail &&
+                        l.Status == LicenseStatus.Active &&
+                        l.ExpiresAt > DateTime.UtcNow)
+                    .OrderByDescending(l => l.ExpiresAt)
+                    .FirstOrDefaultAsync();
+
+                if (license != null && !string.IsNullOrWhiteSpace(license.Key))
+                {
+                    _opts.LicenseKey = license.Key.Trim();
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to apply platform overrides for Email plugin");
+            }
+        }
+
+        private static async Task EnsureSettingsTableAsync(AppDbContext db)
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS "PlatformSettings" (
+                    "Key" TEXT PRIMARY KEY,
+                    "Value" TEXT NOT NULL
+                );
+            """);
+        }
+
+        private static async Task<string?> GetSettingAsync(AppDbContext db, string key)
+        {
+            await EnsureSettingsTableAsync(db);
+            var conn = db.Database.GetDbConnection();
+            var closeAfter = conn.State != ConnectionState.Open;
+            if (closeAfter) await conn.OpenAsync();
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """SELECT "Value" FROM "PlatformSettings" WHERE "Key" = @key LIMIT 1;""";
+                var p = cmd.CreateParameter();
+                p.ParameterName = "@key";
+                p.Value = key;
+                cmd.Parameters.Add(p);
+                var value = await cmd.ExecuteScalarAsync();
+                return value == null || value == DBNull.Value ? null : value.ToString();
+            }
+            finally
+            {
+                if (closeAfter) await conn.CloseAsync();
+            }
+        }
+
         private static string NormalizeDomain(string domain)
         {
             if (string.IsNullOrWhiteSpace(domain)) return "unknown";
@@ -411,7 +526,7 @@ namespace VerifyHub.EmailPlugin
                     status   = s.Status,
                     daysLeft = s.DaysLeft,
                     error    = s.Error,
-                    renewUrl = $"{opts.BaseDomain.Replace("api.", "")}/dashboard",
+                    renewUrl = service.GetRenewUrl(ctx),
                 });
             });
 

@@ -20,6 +20,7 @@
  */
 
 using System.Collections.Concurrent;
+using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +33,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
+using VerifyHubPortal.Data;
+using VerifyHubPortal.Models;
 
 namespace VerifyHub.MobilePlugin
 {
@@ -87,14 +91,26 @@ namespace VerifyHub.MobilePlugin
         private readonly ConcurrentDictionary<string, QrSession> _byId    = new();
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
         private readonly ILogger _log;
+        private readonly IServiceScopeFactory _scopeFactory;
+        private readonly IConfiguration _cfg;
 
-        public MobileQrService(IOptions<MobilePluginOptions> opts, ILogger<MobileQrService> log)
-        { _opts = opts.Value; _log = log; }
+        public MobileQrService(
+            IOptions<MobilePluginOptions> opts,
+            ILogger<MobileQrService> log,
+            IServiceScopeFactory scopeFactory,
+            IConfiguration cfg)
+        {
+            _opts = opts.Value;
+            _log = log;
+            _scopeFactory = scopeFactory;
+            _cfg = cfg;
+        }
 
         public MobilePluginState State => _state;
 
         public async Task InitAsync(string domain)
         {
+            await ApplyPlatformOverridesAsync();
             try
             {
                 var body = JsonSerializer.Serialize(new
@@ -133,9 +149,9 @@ namespace VerifyHub.MobilePlugin
             return true;
         }
 
-        public async Task<bool> ProcessSnapshotAsync(string token, JsonElement snap, HttpContext ctx)
+        public Task<bool> ProcessSnapshotAsync(string token, JsonElement snap, HttpContext ctx)
         {
-            var s = GetByToken(token); if (s == null || s.IsExpired) return false;
+            var s = GetByToken(token); if (s == null || s.IsExpired) return Task.FromResult(false);
             var ip = ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
                   ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             s.Snapshots.Add(snap);
@@ -143,7 +159,7 @@ namespace VerifyHub.MobilePlugin
 
             // Forward to VerifyHub base domain asynchronously
             _ = Task.Run(async () => await ForwardTelemetryAsync(s.SessionId, snap, ip));
-            return true;
+            return Task.FromResult(true);
         }
 
         public bool Verify(string token, string? phone, string? email)
@@ -185,6 +201,103 @@ namespace VerifyHub.MobilePlugin
         private static string GenerateToken() =>
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
                 .Replace("+", "-").Replace("/", "_").Replace("=", "");
+
+        public string GetRenewUrl(HttpContext? ctx = null)
+        {
+            var configured = Environment.GetEnvironmentVariable("PLATFORM_DASHBOARD_URL")
+                ?? _cfg["VerifyHub:DashboardUrl"];
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                var s = configured.Trim().TrimEnd('/');
+                return s.EndsWith("/dashboard", StringComparison.OrdinalIgnoreCase) ? s : $"{s}/dashboard";
+            }
+
+            if (Uri.TryCreate(_opts.BaseDomain, UriKind.Absolute, out var baseUri))
+            {
+                var authority = baseUri.IsDefaultPort ? baseUri.Host : $"{baseUri.Host}:{baseUri.Port}";
+                return $"{baseUri.Scheme}://{authority}/dashboard";
+            }
+
+            if (ctx != null)
+            {
+                return $"{ctx.Request.Scheme}://{ctx.Request.Host}/dashboard";
+            }
+
+            return "/dashboard";
+        }
+
+        private async Task ApplyPlatformOverridesAsync()
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetService<AppDbContext>();
+                if (db == null) return;
+
+                var configuredBase = await GetSettingAsync(db, "plugins.baseDomain");
+                if (!string.IsNullOrWhiteSpace(configuredBase) &&
+                    Uri.TryCreate(configuredBase, UriKind.Absolute, out var baseUri))
+                {
+                    _opts.BaseDomain = $"{baseUri.Scheme}://{baseUri.Host}{(baseUri.IsDefaultPort ? "" : ":" + baseUri.Port)}";
+                }
+
+                var ownerEmail = (Environment.GetEnvironmentVariable("PLATFORM_OWNER_EMAIL")
+                    ?? "platform@verifyhub.local").Trim().ToLowerInvariant();
+
+                var license = await db.Licenses
+                    .Include(l => l.User)
+                    .Where(l =>
+                        l.KeyPrefix == "MOB" &&
+                        l.User != null &&
+                        l.User.Email == ownerEmail &&
+                        l.Status == LicenseStatus.Active &&
+                        l.ExpiresAt > DateTime.UtcNow)
+                    .OrderByDescending(l => l.ExpiresAt)
+                    .FirstOrDefaultAsync();
+
+                if (license != null && !string.IsNullOrWhiteSpace(license.Key))
+                {
+                    _opts.LicenseKey = license.Key.Trim();
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to apply platform overrides for Mobile plugin");
+            }
+        }
+
+        private static async Task EnsureSettingsTableAsync(AppDbContext db)
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS "PlatformSettings" (
+                    "Key" TEXT PRIMARY KEY,
+                    "Value" TEXT NOT NULL
+                );
+            """);
+        }
+
+        private static async Task<string?> GetSettingAsync(AppDbContext db, string key)
+        {
+            await EnsureSettingsTableAsync(db);
+            var conn = db.Database.GetDbConnection();
+            var closeAfter = conn.State != ConnectionState.Open;
+            if (closeAfter) await conn.OpenAsync();
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """SELECT "Value" FROM "PlatformSettings" WHERE "Key" = @key LIMIT 1;""";
+                var p = cmd.CreateParameter();
+                p.ParameterName = "@key";
+                p.Value = key;
+                cmd.Parameters.Add(p);
+                var value = await cmd.ExecuteScalarAsync();
+                return value == null || value == DBNull.Value ? null : value.ToString();
+            }
+            finally
+            {
+                if (closeAfter) await conn.CloseAsync();
+            }
+        }
     }
 
     // ── Extension methods ─────────────────────────────────────────────────
@@ -219,15 +332,17 @@ namespace VerifyHub.MobilePlugin
             });
 
             // License status
-            app.MapGet("/mobileverify/license-status", () =>
+            app.MapGet("/mobileverify/license-status", async (HttpContext ctx) =>
             {
+                await service.InitAsync(ctx.Request.Host.Host);
                 var s = service.State;
-                return Results.Json(new { valid = s.IsValid, status = s.Status, daysLeft = s.DaysLeft, error = s.Error, renewUrl = $"{opts.BaseDomain.Replace("api.","")}/dashboard" });
+                return Results.Json(new { valid = s.IsValid, status = s.Status, daysLeft = s.DaysLeft, error = s.Error, renewUrl = service.GetRenewUrl(ctx) });
             });
 
             // Desktop: create QR session
-            app.MapPost("/mobileverify/create", (HttpContext ctx) =>
+            app.MapPost("/mobileverify/create", async (HttpContext ctx) =>
             {
+                if (!service.State.IsValid) await service.InitAsync(ctx.Request.Host.Host);
                 if (!service.State.IsValid) return Results.StatusCode(402);
                 var ip = ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
                       ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
