@@ -126,15 +126,33 @@ namespace VerifyHub.EmailPlugin
         private readonly ConcurrentDictionary<string, TokenRecord> _tokens = new();
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
         private readonly ILogger _log;
+        private string _licenseDomain = "unknown";
 
         public EmailVerifyService(IOptions<EmailPluginOptions> opts, ILogger<EmailVerifyService> log)
         { _opts = opts.Value; _log = log; }
 
         public LicenseState LicenseState => _state;
 
+        public async Task EnsureLicenseReadyAsync(string domain, string version, string serverInfo)
+        {
+            domain = NormalizeDomain(domain);
+            var recent = (DateTime.UtcNow - _state.LastCheck) < TimeSpan.FromMinutes(5);
+            if (!_state.IsValid || !string.Equals(_licenseDomain, domain, StringComparison.OrdinalIgnoreCase))
+            {
+                await InitAsync(domain, version, serverInfo);
+                return;
+            }
+
+            if (!recent)
+            {
+                await RefreshLicenseAsync(domain);
+            }
+        }
+
         // Called on startup: validate license, register domain
         public async Task InitAsync(string domain, string version, string serverInfo)
         {
+            domain = NormalizeDomain(domain);
             try
             {
                 var body = JsonSerializer.Serialize(new
@@ -152,12 +170,15 @@ namespace VerifyHub.EmailPlugin
                     _state.IsValid     = true;
                     _state.Status      = "Active";
                     _state.PluginToken = d.TryGetProperty("pluginToken", out var t) ? t.GetString() : null;
+                    _state.LastCheck   = DateTime.UtcNow;
+                    _licenseDomain     = domain;
                     _log.LogInformation("EmailVerifyPlugin activated on {Domain}", domain);
                 }
                 else
                 {
                     _state.IsValid = false;
                     _state.Error   = d.TryGetProperty("error", out var e) ? e.GetString() : "Activation failed.";
+                    _state.LastCheck = DateTime.UtcNow;
                     _log.LogWarning("EmailVerifyPlugin activation failed: {Err}", _state.Error);
                 }
             }
@@ -165,12 +186,14 @@ namespace VerifyHub.EmailPlugin
             {
                 _log.LogError(ex, "EmailVerifyPlugin activation exception");
                 _state.Error = ex.Message;
+                _state.LastCheck = DateTime.UtcNow;
             }
         }
 
         // Periodically re-validate license (every 1 hour)
         public async Task RefreshLicenseAsync(string domain)
         {
+            domain = NormalizeDomain(domain);
             try
             {
                 var body = JsonSerializer.Serialize(new { licenseKey = _opts.LicenseKey, domain });
@@ -184,6 +207,7 @@ namespace VerifyHub.EmailPlugin
                 _state.VerifLeft = d.TryGetProperty("verificationsLeft", out var vl) ? vl.GetInt32() : 0;
                 _state.Error   = _state.IsValid ? null : (d.TryGetProperty("error", out var e) ? e.GetString() : "License invalid");
                 _state.LastCheck = DateTime.UtcNow;
+                _licenseDomain = domain;
             }
             catch (Exception ex) { _log.LogWarning(ex, "License refresh failed"); }
         }
@@ -313,6 +337,21 @@ namespace VerifyHub.EmailPlugin
         private static bool ConstantEquals(string a, string b) { if (a.Length != b.Length) return false; int d = 0; for (int i = 0; i < a.Length; i++) d |= a[i] ^ b[i]; return d == 0; }
         private static string ParseBrowser(string ua) { if (ua.Contains("Chrome/")) return "Chrome"; if (ua.Contains("Firefox/")) return "Firefox"; if (ua.Contains("Safari/")) return "Safari"; return "Other"; }
         private static string ParseOs(string ua) { if (ua.Contains("Windows")) return "Windows"; if (ua.Contains("Android")) return "Android"; if (ua.Contains("iPhone") || ua.Contains("iPad")) return "iOS"; if (ua.Contains("Mac OS X")) return "macOS"; return "Other"; }
+        private static string NormalizeDomain(string domain)
+        {
+            if (string.IsNullOrWhiteSpace(domain)) return "unknown";
+            domain = domain.Trim();
+
+            if (Uri.TryCreate(domain, UriKind.Absolute, out var uri))
+            {
+                domain = uri.Host;
+            }
+
+            var colon = domain.IndexOf(':');
+            if (colon > 0) domain = domain[..colon];
+
+            return string.IsNullOrWhiteSpace(domain) ? "unknown" : domain.ToLowerInvariant();
+        }
 
         private string BuildEmail(string to, string link, string code) => $@"<!DOCTYPE html><html><head><meta charset='UTF-8'/></head>
 <body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f4f6fa;margin:0;padding:0'>
@@ -351,26 +390,20 @@ namespace VerifyHub.EmailPlugin
 
             // Startup: activate license + create directory
             var domain = opts.BaseDomain; // TODO: detect from first request
-            app.Lifetime.ApplicationStarted.Register(async () =>
+            app.Lifetime.ApplicationStarted.Register(() =>
             {
                 // Create /magiclink directory if it doesn't exist
                 var dir = Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "magiclink");
                 if (!Directory.Exists(dir)) { Directory.CreateDirectory(dir); }
-
-                await service.InitAsync("unknown", "1.0.0", Environment.MachineName);
-
-                // Background: refresh license every hour
-                _ = Task.Run(async () =>
-                {
-                    while (true) { await Task.Delay(TimeSpan.FromHours(1)); await service.RefreshLicenseAsync("unknown"); }
-                });
             });
 
             // ── Plugin Routes ──────────────────────────────────────────────
 
             // License status (called by JS to check if renewal popup needed)
-            app.MapGet("/magiclink/license-status", () =>
+            app.MapGet("/magiclink/license-status", async (HttpContext ctx) =>
             {
+                var domain = ctx.Request.Host.Host;
+                await service.EnsureLicenseReadyAsync(domain, "1.0.0", Environment.MachineName);
                 var s = service.LicenseState;
                 return Results.Json(new
                 {
@@ -388,6 +421,7 @@ namespace VerifyHub.EmailPlugin
                 var body  = await JsonSerializer.DeserializeAsync<JsonElement>(ctx.Request.Body);
                 var email = body.TryGetProperty("email", out var e) ? e.GetString() ?? "" : "";
                 var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                await service.EnsureLicenseReadyAsync(ctx.Request.Host.Host, "1.0.0", Environment.MachineName);
                 var (ok, error) = await service.SendMagicLinkAsync(email, baseUrl);
                 return ok ? Results.Ok(new { sent = true }) : Results.BadRequest(new { error });
             });
@@ -420,6 +454,7 @@ namespace VerifyHub.EmailPlugin
             app.MapPost("/magiclink/api/fingerprint", async (HttpContext ctx, [FromBody] FingerprintPayload fp) =>
             {
                 var sessionId = ctx.Request.Headers["X-Session-Id"].FirstOrDefault() ?? Guid.NewGuid().ToString();
+                await service.EnsureLicenseReadyAsync(ctx.Request.Host.Host, "1.0.0", Environment.MachineName);
                 await service.ForwardTelemetryAsync(sessionId, fp, ctx);
                 return Results.Ok(new { ok = true });
             });
