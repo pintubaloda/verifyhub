@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using VerifyHubPortal.Data;
+using VerifyHubPortal.Models;
 using VerifyHubPortal.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -86,6 +87,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+    await EnsureBootstrapAdminAsync(scope.ServiceProvider, db);
 }
 
 app.UseCors("frontend");
@@ -101,6 +103,55 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTime.UtcN
 app.MapFallbackToFile("index.html");
 
 app.Run();
+
+static async Task EnsureBootstrapAdminAsync(IServiceProvider services, AppDbContext db)
+{
+    var email = Environment.GetEnvironmentVariable("ADMIN_EMAIL")?.Trim().ToLowerInvariant();
+    var password = Environment.GetEnvironmentVariable("ADMIN_PASSWORD");
+    var name = Environment.GetEnvironmentVariable("ADMIN_NAME")?.Trim();
+    var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("AdminBootstrap");
+
+    if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+    {
+        return;
+    }
+
+    var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
+    if (user == null)
+    {
+        user = new User
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? "Admin" : name,
+            Email = email,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            Role = UserRole.Admin,
+            IsActive = true
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        logger.LogInformation("Bootstrap admin user created for {Email}", email);
+        return;
+    }
+
+    var changed = false;
+    if (user.Role != UserRole.Admin)
+    {
+        user.Role = UserRole.Admin;
+        changed = true;
+    }
+
+    if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+    {
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
+        changed = true;
+    }
+
+    if (changed)
+    {
+        await db.SaveChangesAsync();
+        logger.LogInformation("Bootstrap admin user updated for {Email}", email);
+    }
+}
 
 static bool LooksLikePostgres(string? connectionString)
 {

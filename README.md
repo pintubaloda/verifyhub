@@ -145,10 +145,12 @@ This repository includes `/render.yaml` with:
 - `DATABASE_URL` (from Render PostgreSQL connection string)
 - `VITE_API_BASE_URL` (from backend service URL)
 - `Jwt__Secret`, `Jwt__PluginSecret`, `VerifyHub__LicenseHmacSecret` (auto-generated)
+- `ADMIN_EMAIL`, `ADMIN_PASSWORD` (auto-create/promote admin on startup)
 
 ### Notes
 - Backend now supports `DATABASE_URL` in Postgres URL format.
 - If `DATABASE_URL` is not provided, backend falls back to `ConnectionStrings:Default`.
+- If `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set, backend creates or promotes that user to Admin on startup.
 
 ---
 
