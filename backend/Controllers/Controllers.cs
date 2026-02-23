@@ -228,10 +228,11 @@ namespace VerifyHubPortal.Controllers
         private readonly AppDbContext _db;
         private readonly ILicenseService _licenseSvc;
         private readonly IPluginAuthService _pluginAuth;
+        private readonly IConfiguration _cfg;
         private readonly ILogger<PluginController> _log;
 
-        public PluginController(AppDbContext db, ILicenseService ls, IPluginAuthService pa, ILogger<PluginController> log)
-        { _db = db; _licenseSvc = ls; _pluginAuth = pa; _log = log; }
+        public PluginController(AppDbContext db, ILicenseService ls, IPluginAuthService pa, IConfiguration cfg, ILogger<PluginController> log)
+        { _db = db; _licenseSvc = ls; _pluginAuth = pa; _cfg = cfg; _log = log; }
 
         // Called on plugin install/startup: validates key, registers domain, returns plugin token
         [HttpPost("activate")]
@@ -266,6 +267,84 @@ namespace VerifyHubPortal.Controllers
         // Health check — plugin pings this periodically
         [HttpGet("health")]
         public IActionResult Health() => Ok(new { status = "ok", time = DateTime.UtcNow });
+
+        [HttpPost("email-config")]
+        public async Task<IActionResult> EmailConfig([FromBody] PluginEmailConfigRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.LicenseKey))
+                return BadRequest(new { error = "License key is required." });
+
+            var license = await _db.Licenses
+                .Include(l => l.Plan)
+                .FirstOrDefaultAsync(l => l.Key == req.LicenseKey && l.KeyPrefix == "EML");
+
+            if (license == null) return Unauthorized(new { error = "Invalid email plugin license." });
+            if (license.IsExpired || license.Status != LicenseStatus.Active)
+                return StatusCode(402, new { error = "License not active." });
+
+            var smtpHost = await GetSettingAsync("platform.smtp.host") ?? "";
+            var smtpPortRaw = await GetSettingAsync("platform.smtp.port");
+            var smtpSslRaw = await GetSettingAsync("platform.smtp.enableSsl");
+            var smtpUser = await GetSettingAsync("platform.smtp.username") ?? "";
+            var smtpPass = await GetSettingAsync("platform.smtp.password") ?? "";
+            var smtpFromEmail = await GetSettingAsync("platform.smtp.fromEmail") ?? "";
+            var smtpFromName = await GetSettingAsync("platform.smtp.fromName") ?? "VerifyHub";
+
+            if (string.IsNullOrWhiteSpace(smtpHost) || string.IsNullOrWhiteSpace(smtpFromEmail))
+                return NotFound(new { error = "SMTP config is not configured on platform." });
+
+            var smtpPort = int.TryParse(smtpPortRaw, out var parsedPort) ? parsedPort : 587;
+            var smtpSsl = bool.TryParse(smtpSslRaw, out var parsedSsl) ? parsedSsl : true;
+
+            return Ok(new
+            {
+                smtp = new
+                {
+                    host = smtpHost,
+                    port = smtpPort,
+                    enableSsl = smtpSsl,
+                    username = smtpUser,
+                    password = smtpPass,
+                    fromEmail = smtpFromEmail,
+                    fromName = smtpFromName
+                }
+            });
+        }
+
+        private async Task EnsureSettingsTableAsync()
+        {
+            await _db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS "PlatformSettings" (
+                    "Key" TEXT PRIMARY KEY,
+                    "Value" TEXT NOT NULL
+                );
+            """);
+        }
+
+        private async Task<string?> GetSettingAsync(string key)
+        {
+            await EnsureSettingsTableAsync();
+            var conn = _db.Database.GetDbConnection();
+            var closeAfter = conn.State != ConnectionState.Open;
+            if (closeAfter) await conn.OpenAsync();
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """SELECT "Value" FROM "PlatformSettings" WHERE "Key" = @key LIMIT 1;""";
+                var p = cmd.CreateParameter();
+                p.ParameterName = "@key";
+                p.Value = key;
+                cmd.Parameters.Add(p);
+                var v = await cmd.ExecuteScalarAsync();
+                return v == null || v == DBNull.Value ? null : v.ToString();
+            }
+            finally
+            {
+                if (closeAfter) await conn.CloseAsync();
+            }
+        }
+
+        public record PluginEmailConfigRequest(string LicenseKey);
     }
 
     // ══════════════════════════════════════════════════════════
@@ -459,6 +538,7 @@ namespace VerifyHubPortal.Controllers
                 .OrderBy(l => l.KeyPrefix)
                 .Select(l => new
                 {
+                    l.Id,
                     l.KeyPrefix,
                     l.Key,
                     l.ExpiresAt,
@@ -485,10 +565,22 @@ namespace VerifyHubPortal.Controllers
                 adminBootstrapEmail = Environment.GetEnvironmentVariable("ADMIN_EMAIL")
             };
 
+            var smtp = new
+            {
+                host = await GetSettingAsync("platform.smtp.host") ?? "",
+                port = int.TryParse(await GetSettingAsync("platform.smtp.port"), out var port) ? port : 587,
+                enableSsl = bool.TryParse(await GetSettingAsync("platform.smtp.enableSsl"), out var ssl) ? ssl : true,
+                username = await GetSettingAsync("platform.smtp.username") ?? "",
+                fromEmail = await GetSettingAsync("platform.smtp.fromEmail") ?? "",
+                fromName = await GetSettingAsync("platform.smtp.fromName") ?? "VerifyHub",
+                passwordConfigured = !string.IsNullOrWhiteSpace(await GetSettingAsync("platform.smtp.password"))
+            };
+
             return Ok(new
             {
                 defaults,
                 security,
+                smtp,
                 platform = new
                 {
                     ownerEmail = platformOwnerEmail,
@@ -533,6 +625,50 @@ namespace VerifyHubPortal.Controllers
             await SetSettingAsync(PluginBaseDomainSettingKey, normalized);
 
             return Ok(new { saved = true, baseDomain = normalized });
+        }
+
+        [HttpPost("plugin-settings/smtp")]
+        public async Task<IActionResult> SetPlatformSmtp([FromBody] UpdatePlatformSmtpRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.Host)) return BadRequest(new { error = "SMTP host is required." });
+            if (req.Port <= 0) return BadRequest(new { error = "SMTP port must be > 0." });
+            if (string.IsNullOrWhiteSpace(req.FromEmail)) return BadRequest(new { error = "From email is required." });
+
+            await SetSettingAsync("platform.smtp.host", req.Host.Trim());
+            await SetSettingAsync("platform.smtp.port", req.Port.ToString());
+            await SetSettingAsync("platform.smtp.enableSsl", req.EnableSsl.ToString());
+            await SetSettingAsync("platform.smtp.username", req.Username?.Trim() ?? "");
+            if (!string.IsNullOrWhiteSpace(req.Password))
+            {
+                await SetSettingAsync("platform.smtp.password", req.Password.Trim());
+            }
+            await SetSettingAsync("platform.smtp.fromEmail", req.FromEmail.Trim());
+            await SetSettingAsync("platform.smtp.fromName", req.FromName?.Trim() ?? "VerifyHub");
+
+            return Ok(new { saved = true });
+        }
+
+        [HttpPost("platform-keys/{id}")]
+        public async Task<IActionResult> UpdatePlatformLifetimeKey(Guid id, [FromBody] UpdatePlatformLifetimeKeyRequest req)
+        {
+            var license = await _db.Licenses.FirstOrDefaultAsync(l => l.Id == id && (l.KeyPrefix == "EML" || l.KeyPrefix == "MOB"));
+            if (license == null) return NotFound(new { error = "Platform lifetime key not found." });
+
+            if (string.IsNullOrWhiteSpace(req.Key))
+                return BadRequest(new { error = "Key is required." });
+
+            var newKey = req.Key.Trim().ToUpperInvariant();
+            if (!newKey.StartsWith($"{license.KeyPrefix}-", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { error = $"Key must start with '{license.KeyPrefix}-'." });
+
+            var keyExists = await _db.Licenses.AnyAsync(l => l.Key == newKey && l.Id != id);
+            if (keyExists)
+                return Conflict(new { error = "This key already exists." });
+
+            license.Key = newKey;
+            license.Status = LicenseStatus.Active;
+            await _db.SaveChangesAsync();
+            return Ok(new { saved = true, key = license.Key });
         }
 
         [HttpPost("plans/{id}")]
@@ -658,6 +794,16 @@ namespace VerifyHubPortal.Controllers
         }
 
         public record UpdatePluginBaseDomainRequest(string BaseDomain);
+        public record UpdatePlatformLifetimeKeyRequest(string Key);
+        public record UpdatePlatformSmtpRequest(
+            string Host,
+            int Port,
+            bool EnableSsl,
+            string? Username,
+            string? Password,
+            string FromEmail,
+            string? FromName
+        );
         public record UpdatePlanRequest(
             string Name,
             decimal PriceUsd,

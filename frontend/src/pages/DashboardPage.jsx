@@ -492,12 +492,22 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   const platform = settings?.platform
   const [baseDomain, setBaseDomain] = useState(defaults?.baseDomain || '')
   const [saving, setSaving] = useState(false)
+  const [keyForm, setKeyForm] = useState({})
+  const [keySaving, setKeySaving] = useState({})
   const [planForm, setPlanForm] = useState({})
   const [planSaving, setPlanSaving] = useState({})
 
   useEffect(() => {
     setBaseDomain(defaults?.baseDomain || '')
   }, [defaults?.baseDomain])
+
+  useEffect(() => {
+    const next = {}
+    for (const k of (platform?.lifetimeKeys || [])) {
+      next[k.id] = k.key
+    }
+    setKeyForm(next)
+  }, [platform?.lifetimeKeys])
 
   useEffect(() => {
     const next = {}
@@ -543,6 +553,26 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
       ...prev,
       [planId]: { ...(prev[planId] || {}), [key]: value }
     }))
+  }
+
+  const savePlatformKey = async (id) => {
+    const key = (keyForm[id] || '').trim()
+    if (!key) { toast.error('Key is required.'); return }
+
+    setKeySaving(prev => ({ ...prev, [id]: true }))
+    try {
+      const r = await API(`/api/admin/platform-keys/${id}`, {
+        method: 'POST',
+        body: JSON.stringify({ key }),
+      })
+      const d = await r.json()
+      if (!r.ok) toast.error(d.error || 'Failed to update key.')
+      else { toast.success('Platform key updated.'); onRefresh?.() }
+    } catch {
+      toast.error('Network error while updating key.')
+    } finally {
+      setKeySaving(prev => ({ ...prev, [id]: false }))
+    }
   }
 
   const savePlan = async (planId) => {
@@ -634,9 +664,31 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
         ) : (
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:10 }}>
             {(platform?.lifetimeKeys || []).map(k => (
-              <div key={k.key} style={{ background:'#050810', border:'1px solid #162040', borderRadius:10, padding:10 }}>
+              <div key={k.id} style={{ background:'#050810', border:'1px solid #162040', borderRadius:10, padding:10 }}>
                 <div style={{ color:'#F0F4FF', fontSize:13, fontWeight:700 }}>{k.product} ({k.keyPrefix})</div>
-                <div style={{ fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontSize:12, margin:'6px 0' }}>{k.key}</div>
+                <input
+                  value={keyForm[k.id] ?? ''}
+                  onChange={e => setKeyForm(prev => ({ ...prev, [k.id]: e.target.value }))}
+                  style={{ width:'100%', margin:'6px 0', fontFamily:'JetBrains Mono,monospace', background:'#0a0f1e', border:'1px solid #162040', color:'#4F8FFF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                />
+                <button
+                  onClick={() => savePlatformKey(k.id)}
+                  disabled={!!keySaving[k.id]}
+                  style={{
+                    width:'100%',
+                    marginBottom:6,
+                    background: keySaving[k.id] ? '#162040' : 'linear-gradient(135deg,#4F8FFF,#B06AFF)',
+                    color:'#fff',
+                    border:'none',
+                    borderRadius:8,
+                    padding:'8px 10px',
+                    cursor: keySaving[k.id] ? 'not-allowed' : 'pointer',
+                    fontSize:12,
+                    fontWeight:700,
+                  }}
+                >
+                  {keySaving[k.id] ? 'Saving...' : `Save ${k.keyPrefix} Key`}
+                </button>
                 <div style={{ color:'#5A6A8A', fontSize:12 }}>Domain: {k.installedDomain || '-'}</div>
                 <div style={{ color:'#5A6A8A', fontSize:12 }}>Expires: {k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : '-'}</div>
               </div>
