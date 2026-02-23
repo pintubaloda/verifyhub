@@ -268,7 +268,7 @@ namespace VerifyHub.EmailPlugin
             if (!ok) { r.Attempts++; _tokens[tokenStr] = r; return (false, null, $"Wrong code. {5 - r.Attempts} attempts left."); }
 
             r.Used = true; _tokens[tokenStr] = r;
-            _ = Task.Delay(TimeSpan.FromMinutes(5)).ContinueWith(_ => _tokens.TryRemove(tokenStr, out _));
+            _ = Task.Delay(TimeSpan.FromMinutes(5)).ContinueWith(__ => _tokens.TryRemove(tokenStr, out _));
             return (true, r.Email, null);
         }
 
