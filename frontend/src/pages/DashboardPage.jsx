@@ -608,8 +608,19 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   const defaults = settings?.defaults
   const security = settings?.security
   const platform = settings?.platform
+  const smtp = settings?.smtp
   const [baseDomain, setBaseDomain] = useState(defaults?.baseDomain || '')
   const [saving, setSaving] = useState(false)
+  const [smtpSaving, setSmtpSaving] = useState(false)
+  const [smtpForm, setSmtpForm] = useState({
+    host: '',
+    port: 587,
+    enableSsl: true,
+    username: '',
+    password: '',
+    fromEmail: '',
+    fromName: 'VerifyHub',
+  })
   const [keyForm, setKeyForm] = useState({})
   const [keySaving, setKeySaving] = useState({})
   const [planForm, setPlanForm] = useState({})
@@ -618,6 +629,18 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   useEffect(() => {
     setBaseDomain(defaults?.baseDomain || '')
   }, [defaults?.baseDomain])
+
+  useEffect(() => {
+    setSmtpForm({
+      host: smtp?.host || '',
+      port: smtp?.port ?? 587,
+      enableSsl: smtp?.enableSsl ?? true,
+      username: smtp?.username || '',
+      password: '',
+      fromEmail: smtp?.fromEmail || '',
+      fromName: smtp?.fromName || 'VerifyHub',
+    })
+  }, [smtp?.host, smtp?.port, smtp?.enableSsl, smtp?.username, smtp?.fromEmail, smtp?.fromName])
 
   useEffect(() => {
     const next = {}
@@ -667,6 +690,32 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
       toast.error('Network error while saving base domain.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const saveSmtp = async () => {
+    setSmtpSaving(true)
+    try {
+      const body = {
+        host: smtpForm.host,
+        port: Number(smtpForm.port),
+        enableSsl: !!smtpForm.enableSsl,
+        username: smtpForm.username || '',
+        password: smtpForm.password || '',
+        fromEmail: smtpForm.fromEmail,
+        fromName: smtpForm.fromName || 'VerifyHub',
+      }
+      const r = await API('/api/admin/plugin-settings/smtp', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      const d = await r.json()
+      if (!r.ok) toast.error(d.error || 'Failed to save SMTP settings.')
+      else { toast.success('SMTP settings saved.'); setSmtpForm(prev => ({ ...prev, password: '' })); onRefresh?.() }
+    } catch {
+      toast.error('Network error while saving SMTP settings.')
+    } finally {
+      setSmtpSaving(false)
     }
   }
 
@@ -834,6 +883,31 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
             ))}
           </div>
         )}
+      </div>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>SMTP Settings (Email Verify Plugin)</h3>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:8, marginBottom:10 }}>
+          <input value={smtpForm.host} onChange={e => setSmtpForm(prev => ({ ...prev, host: e.target.value }))} placeholder="SMTP Host" style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12 }} />
+          <input type="number" value={smtpForm.port} onChange={e => setSmtpForm(prev => ({ ...prev, port: e.target.value }))} placeholder="Port" style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12 }} />
+          <input value={smtpForm.username} onChange={e => setSmtpForm(prev => ({ ...prev, username: e.target.value }))} placeholder="Username" style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12 }} />
+          <input type="password" value={smtpForm.password} onChange={e => setSmtpForm(prev => ({ ...prev, password: e.target.value }))} placeholder={smtp?.passwordConfigured ? 'Password (leave blank to keep existing)' : 'Password'} style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12 }} />
+          <input value={smtpForm.fromEmail} onChange={e => setSmtpForm(prev => ({ ...prev, fromEmail: e.target.value }))} placeholder="From Email" style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12 }} />
+          <input value={smtpForm.fromName} onChange={e => setSmtpForm(prev => ({ ...prev, fromName: e.target.value }))} placeholder="From Name" style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12 }} />
+        </div>
+        <label style={{ color:'#5A6A8A', fontSize:12, display:'inline-flex', alignItems:'center', gap:6, marginBottom:10 }}>
+          <input type="checkbox" checked={!!smtpForm.enableSsl} onChange={e => setSmtpForm(prev => ({ ...prev, enableSsl: e.target.checked }))} />
+          Enable SSL
+        </label>
+        <div>
+          <button
+            onClick={saveSmtp}
+            disabled={smtpSaving}
+            style={{ padding:'10px 14px', borderRadius:10, border:'none', cursor:smtpSaving ? 'not-allowed' : 'pointer', background:smtpSaving ? '#162040' : 'linear-gradient(135deg,#4F8FFF,#B06AFF)', color:'#fff', fontSize:13, fontWeight:700 }}
+          >
+            {smtpSaving ? 'Saving...' : 'Save SMTP Settings'}
+          </button>
+        </div>
       </div>
 
       <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>

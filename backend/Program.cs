@@ -215,8 +215,8 @@ static async Task EnsurePlatformLifetimeLicensesAsync(
             var changed = false;
             if (existing.PlanId != plan.Id) { existing.PlanId = plan.Id; changed = true; }
             if (existing.Status != LicenseStatus.Active) { existing.Status = LicenseStatus.Active; changed = true; }
-            if (existing.ExpiresAt < DateTime.UtcNow.AddYears(50)) { existing.ExpiresAt = DateTime.UtcNow.AddYears(75); changed = true; }
-            if (existing.InstalledDomain != domain) { existing.InstalledDomain = domain; changed = true; }
+            if (string.IsNullOrWhiteSpace(existing.InstalledDomain)) { existing.InstalledDomain = domain; changed = true; }
+            if (existing.ExpiresAt <= DateTime.UtcNow) { existing.ExpiresAt = DateTime.UtcNow.AddYears(75); changed = true; }
             if (changed) await db.SaveChangesAsync();
         }
     }
