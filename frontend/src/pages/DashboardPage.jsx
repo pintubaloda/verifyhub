@@ -11,14 +11,23 @@ const API = (path, opts = {}) => {
   })
 }
 
+const isAdminRole = (role) => role === 1 || role === 'Admin'
+
 function Sidebar({ active, setActive, user, onLogout }) {
-  const items = [
+  const customerItems = [
     { id:'overview',  icon:'⬛', label:'Overview' },
     { id:'licenses',  icon:'🔑', label:'My Licenses' },
     { id:'telemetry', icon:'📡', label:'Telemetry' },
     { id:'orders',    icon:'🛒', label:'Orders' },
     { id:'billing',   icon:'💳', label:'Billing' },
   ]
+  const adminItems = [
+    { id:'admin-overview',  icon:'🛡️', label:'Admin Overview' },
+    { id:'admin-users',     icon:'👥', label:'Users' },
+    { id:'admin-licenses',  icon:'🔑', label:'Licenses' },
+    { id:'admin-telemetry', icon:'📡', label:'Telemetry' },
+  ]
+  const items = isAdminRole(user?.role) ? adminItems : customerItems
   return (
     <aside style={{
       width:240, background:'#0a0f1e', borderRight:'1px solid #162040',
@@ -62,7 +71,9 @@ function Sidebar({ active, setActive, user, onLogout }) {
           </div>
           <div>
             <div style={{ fontSize:13, fontWeight:600, color:'#F0F4FF' }}>{user?.name ?? 'User'}</div>
-            <div style={{ fontSize:11, color:'#5A6A8A' }}>{user?.email}</div>
+            <div style={{ fontSize:11, color:'#5A6A8A' }}>
+              {user?.email} {isAdminRole(user?.role) ? '· Admin' : '· Customer'}
+            </div>
           </div>
         </div>
         <button onClick={onLogout} style={{
@@ -367,29 +378,154 @@ function TelemetryTab() {
   )
 }
 
+function AdminOverviewTab({ stats }) {
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Admin Overview</h2>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:16, marginBottom:32 }}>
+        <StatCard icon="👥" label="Total Users" value={stats?.totalUsers ?? '—'} color="#4F8FFF" />
+        <StatCard icon="🔑" label="Total Licenses" value={stats?.totalLicenses ?? '—'} color="#00C896" />
+        <StatCard icon="✅" label="Active Licenses" value={stats?.activeLicenses ?? '—'} color="#B06AFF" />
+        <StatCard icon="📡" label="Telemetry Records" value={stats?.totalTelemetryRecords ?? '—'} color="#FFB300" />
+        <StatCard icon="💰" label="Total Revenue (USD)" value={stats?.totalRevenue ?? '—'} color="#00C896" />
+        <StatCard icon="🛒" label="Orders (30d)" value={stats?.ordersThisMonth ?? '—'} color="#4F8FFF" />
+      </div>
+    </div>
+  )
+}
+
+function AdminUsersTab({ users }) {
+  const items = users?.items ?? []
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>All Users</h2>
+      <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:16 }}>
+        Total: {users?.total ?? 0}
+      </div>
+      {!items.length ? (
+        <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>No users found.</div>
+      ) : items.map(u => (
+        <div key={u.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+            <div style={{ fontFamily:'Syne,sans-serif', fontSize:16, fontWeight:700 }}>{u.name}</div>
+            <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(u.createdAt).toLocaleString()}</div>
+          </div>
+          <div style={{ fontSize:13, color:'#5A6A8A', marginTop:6 }}>
+            {u.email} · {u.role === 1 || u.role === 'Admin' ? 'Admin' : 'Customer'} · {u.isActive ? 'Active' : 'Inactive'}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AdminLicensesTab({ licenses }) {
+  const items = licenses?.items ?? []
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>All Licenses</h2>
+      <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:16 }}>
+        Total: {licenses?.total ?? 0}
+      </div>
+      {!items.length ? (
+        <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>No licenses found.</div>
+      ) : items.map(l => (
+        <div key={l.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+            <div style={{ fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontSize:13 }}>{l.key}</div>
+            <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(l.issuedAt).toLocaleString()}</div>
+          </div>
+          <div style={{ fontSize:13, color:'#5A6A8A', marginTop:6 }}>
+            {l.product} · {l.plan} · {l.user} · {l.status}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AdminTelemetryTab() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await API('/api/admin/telemetry')
+      if (r.ok) setData(await r.json())
+    } catch {}
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const items = data?.items ?? []
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Platform Telemetry</h2>
+      <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:16 }}>
+        Total: {data?.total ?? 0}
+      </div>
+      {loading ? (
+        <div style={{ textAlign:'center', padding:60, color:'#5A6A8A' }}>Loading telemetry…</div>
+      ) : !items.length ? (
+        <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>No telemetry records.</div>
+      ) : items.map(t => (
+        <div key={t.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+            <div style={{ fontSize:13, color:'#F0F4FF' }}>{t.channel} · {t.pluginDomain || '-'}</div>
+            <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(t.receivedAt).toLocaleString()}</div>
+          </div>
+          <div style={{ fontSize:12, color:'#5A6A8A', marginTop:6 }}>
+            {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · risk {t.riskScore ?? 0}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Main Dashboard ────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [active, setActive] = useState('overview')
   const [user, setUser] = useState(null)
   const [stats, setStats] = useState(null)
   const [licenses, setLicenses] = useState([])
+  const [adminStats, setAdminStats] = useState(null)
+  const [adminUsers, setAdminUsers] = useState(null)
+  const [adminLicenses, setAdminLicenses] = useState(null)
   const nav = useNavigate()
+  const isAdmin = isAdminRole(user?.role)
 
   useEffect(() => {
     const u = localStorage.getItem('vh_user')
     if (!u) { nav('/login'); return }
-    setUser(JSON.parse(u))
-    loadData()
+    const parsed = JSON.parse(u)
+    setUser(parsed)
+    if (isAdminRole(parsed?.role)) setActive('admin-overview')
+    loadData(parsed)
   }, [])
 
-  const loadData = async () => {
+  const loadData = async (u = user) => {
     try {
-      const [sR, lR] = await Promise.all([
-        API('/api/portal/dashboard-stats'),
-        API('/api/portal/licenses'),
-      ])
-      if (sR.ok) setStats(await sR.json())
-      if (lR.ok) setLicenses(await lR.json())
+      if (isAdminRole(u?.role)) {
+        const [sR, uR, lR] = await Promise.all([
+          API('/api/admin/stats'),
+          API('/api/admin/users'),
+          API('/api/admin/licenses'),
+        ])
+        if (sR.ok) setAdminStats(await sR.json())
+        if (uR.ok) setAdminUsers(await uR.json())
+        if (lR.ok) setAdminLicenses(await lR.json())
+      }
+      else
+      {
+        const [sR, lR] = await Promise.all([
+          API('/api/portal/dashboard-stats'),
+          API('/api/portal/licenses'),
+        ])
+        if (sR.ok) setStats(await sR.json())
+        if (lR.ok) setLicenses(await lR.json())
+      }
     } catch {}
   }
 
@@ -402,11 +538,15 @@ export default function DashboardPage() {
     <div style={{ display:'flex', minHeight:'100vh', background:'#050810' }}>
       <Sidebar active={active} setActive={setActive} user={user} onLogout={logout} />
       <main style={{ marginLeft:240, flex:1, padding:'32px 40px', overflowY:'auto' }}>
-        {active === 'overview'  && <OverviewTab  stats={stats} />}
-        {active === 'licenses'  && <LicensesTab  licenses={licenses} onRefresh={loadData} />}
-        {active === 'telemetry' && <TelemetryTab />}
-        {active === 'orders'    && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Orders coming soon</div>}
-        {active === 'billing'   && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Billing portal coming soon</div>}
+        {!isAdmin && active === 'overview'  && <OverviewTab  stats={stats} />}
+        {!isAdmin && active === 'licenses'  && <LicensesTab  licenses={licenses} onRefresh={loadData} />}
+        {!isAdmin && active === 'telemetry' && <TelemetryTab />}
+        {!isAdmin && active === 'orders'    && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Orders coming soon</div>}
+        {!isAdmin && active === 'billing'   && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Billing portal coming soon</div>}
+        {isAdmin && active === 'admin-overview'  && <AdminOverviewTab stats={adminStats} />}
+        {isAdmin && active === 'admin-users'     && <AdminUsersTab users={adminUsers} />}
+        {isAdmin && active === 'admin-licenses'  && <AdminLicensesTab licenses={adminLicenses} />}
+        {isAdmin && active === 'admin-telemetry' && <AdminTelemetryTab />}
       </main>
     </div>
   )
