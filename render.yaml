@@ -6,7 +6,7 @@ databases:
 services:
   - type: web
     name: verifyhub-api
-    runtime: dotnet
+    runtime: native
     rootDir: backend
     buildCommand: dotnet restore && dotnet publish -c Release -o out
     startCommand: dotnet out/VerifyHubPortal.dll
@@ -32,7 +32,4 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
-        fromService:
-          name: verifyhub-api
-          type: web
-          property: url
+        value: https://verifyhub-api.onrender.com
