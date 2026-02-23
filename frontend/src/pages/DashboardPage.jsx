@@ -489,6 +489,7 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   const plugins = settings?.plugins ?? []
   const defaults = settings?.defaults
   const security = settings?.security
+  const platform = settings?.platform
   const [baseDomain, setBaseDomain] = useState(defaults?.baseDomain || '')
   const [saving, setSaving] = useState(false)
   const [planForm, setPlanForm] = useState({})
@@ -623,6 +624,25 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
           <div>Mobile Telemetry Interval: <strong style={{ color:'#F0F4FF' }}>{defaults?.mobileTelemetryIntervalSeconds ?? '-'} sec</strong></div>
           <div>Mobile QR Expiry: <strong style={{ color:'#F0F4FF' }}>{defaults?.mobileQrExpiryMinutes ?? '-'} min</strong></div>
         </div>
+      </div>
+
+      <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
+        <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Platform Lifetime Keys</h3>
+        <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:8 }}>Owner: <strong style={{ color:'#F0F4FF' }}>{platform?.ownerEmail || '-'}</strong></div>
+        {!(platform?.lifetimeKeys || []).length ? (
+          <div style={{ color:'#5A6A8A', fontSize:13 }}>No platform keys available yet. Restart backend once.</div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))', gap:10 }}>
+            {(platform?.lifetimeKeys || []).map(k => (
+              <div key={k.key} style={{ background:'#050810', border:'1px solid #162040', borderRadius:10, padding:10 }}>
+                <div style={{ color:'#F0F4FF', fontSize:13, fontWeight:700 }}>{k.product} ({k.keyPrefix})</div>
+                <div style={{ fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontSize:12, margin:'6px 0' }}>{k.key}</div>
+                <div style={{ color:'#5A6A8A', fontSize:12 }}>Domain: {k.installedDomain || '-'}</div>
+                <div style={{ color:'#5A6A8A', fontSize:12 }}>Expires: {k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : '-'}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>

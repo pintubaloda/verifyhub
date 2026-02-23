@@ -348,9 +348,13 @@ namespace VerifyHubPortal.Controllers
         public async Task<IActionResult> Mine([FromQuery] string? channel, [FromQuery] int page = 1)
         {
             var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-            var query  = _db.TelemetryRecords
-                .Include(t => t.License)
-                .Where(t => t.License!.UserId == userId);
+            var isAdmin = User.IsInRole("Admin") || User.FindFirstValue(ClaimTypes.Role) == "Admin";
+            var query  = _db.TelemetryRecords.Include(t => t.License).AsQueryable();
+
+            if (!isAdmin)
+            {
+                query = query.Where(t => t.License!.UserId == userId);
+            }
 
             if (!string.IsNullOrEmpty(channel)) query = query.Where(t => t.Channel == channel);
 
@@ -440,11 +444,27 @@ namespace VerifyHubPortal.Controllers
             var baseDomain = await GetSettingAsync(PluginBaseDomainSettingKey)
                 ?? _cfg["VerifyHub:BaseDomain"]
                 ?? "https://api.verifyhub.io";
+            var platformOwnerEmail = (Environment.GetEnvironmentVariable("PLATFORM_OWNER_EMAIL")
+                ?? "platform@verifyhub.local").Trim().ToLowerInvariant();
 
             var products = await _db.Products
                 .Include(p => p.Plans)
                 .Where(p => p.IsActive)
                 .OrderBy(p => p.Name)
+                .ToListAsync();
+            var platformKeys = await _db.Licenses
+                .Include(l => l.Product)
+                .Include(l => l.User)
+                .Where(l => l.User!.Email == platformOwnerEmail && (l.KeyPrefix == "EML" || l.KeyPrefix == "MOB"))
+                .OrderBy(l => l.KeyPrefix)
+                .Select(l => new
+                {
+                    l.KeyPrefix,
+                    l.Key,
+                    l.ExpiresAt,
+                    l.InstalledDomain,
+                    product = l.Product!.Name
+                })
                 .ToListAsync();
 
             var defaults = new
@@ -469,6 +489,11 @@ namespace VerifyHubPortal.Controllers
             {
                 defaults,
                 security,
+                platform = new
+                {
+                    ownerEmail = platformOwnerEmail,
+                    lifetimeKeys = platformKeys
+                },
                 plugins = products.Select(p => new
                 {
                     p.Id,

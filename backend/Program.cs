@@ -86,8 +86,12 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var cfg = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+    var keyGen = scope.ServiceProvider.GetRequiredService<ILicenseKeyGenerator>();
+    var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("PlatformBootstrap");
     db.Database.EnsureCreated();
     await EnsurePlatformSettingsTableAsync(db);
+    await EnsurePlatformLifetimeLicensesAsync(db, cfg, keyGen, log);
     await EnsureBootstrapAdminAsync(scope.ServiceProvider, db);
 }
 
@@ -113,6 +117,89 @@ static async Task EnsurePlatformSettingsTableAsync(AppDbContext db)
             "Value" TEXT NOT NULL
         );
     """);
+}
+
+static async Task EnsurePlatformLifetimeLicensesAsync(
+    AppDbContext db,
+    IConfiguration cfg,
+    ILicenseKeyGenerator keyGen,
+    ILogger logger)
+{
+    var ownerEmail = (Environment.GetEnvironmentVariable("PLATFORM_OWNER_EMAIL")
+        ?? "platform@verifyhub.local").Trim().ToLowerInvariant();
+    var ownerName = Environment.GetEnvironmentVariable("PLATFORM_OWNER_NAME")?.Trim();
+    var domainRaw = (Environment.GetEnvironmentVariable("PLATFORM_DOMAIN")
+        ?? cfg["VerifyHub:BaseDomain"]
+        ?? "https://api.verifyhub.io").Trim();
+
+    string domain;
+    if (Uri.TryCreate(domainRaw, UriKind.Absolute, out var uri)) domain = uri.Host.ToLowerInvariant();
+    else domain = domainRaw.Replace("http://", "").Replace("https://", "").Trim('/').ToLowerInvariant();
+
+    var owner = await db.Users.FirstOrDefaultAsync(u => u.Email == ownerEmail);
+    if (owner == null)
+    {
+        owner = new User
+        {
+            Name = string.IsNullOrWhiteSpace(ownerName) ? "Platform Owner" : ownerName,
+            Email = ownerEmail,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString("N")),
+            Role = UserRole.Admin,
+            IsActive = true,
+            Company = "VerifyHub Platform"
+        };
+        db.Users.Add(owner);
+        await db.SaveChangesAsync();
+    }
+
+    var products = await db.Products.Include(p => p.Plans).Where(p => p.IsActive).ToListAsync();
+    var targets = new[] { ("email-verify", "EML"), ("mobile-qr", "MOB") };
+
+    foreach (var (slug, prefix) in targets)
+    {
+        var product = products.FirstOrDefault(p => p.Slug == slug);
+        if (product == null) continue;
+        var plan = product.Plans.OrderByDescending(p => p.MaxDomains).ThenByDescending(p => p.MaxVerificationsPerMonth).FirstOrDefault();
+        if (plan == null) continue;
+
+        var existing = await db.Licenses
+            .FirstOrDefaultAsync(l => l.UserId == owner.Id && l.ProductId == product.Id && l.KeyPrefix == prefix);
+
+        if (existing == null)
+        {
+            var key = keyGen.Generate(prefix);
+            while (await db.Licenses.AnyAsync(l => l.Key == key)) key = keyGen.Generate(prefix);
+
+            existing = new License
+            {
+                UserId = owner.Id,
+                ProductId = product.Id,
+                PlanId = plan.Id,
+                Key = key,
+                KeyPrefix = prefix,
+                Status = LicenseStatus.Active,
+                IssuedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddYears(75),
+                UsageResetDate = DateTime.UtcNow.AddYears(1),
+                InstalledDomain = domain,
+                ActivatedAt = DateTime.UtcNow,
+                InstalledBy = "platform-bootstrap",
+                ActivationCount = 1
+            };
+            db.Licenses.Add(existing);
+            await db.SaveChangesAsync();
+            logger.LogInformation("Platform lifetime key created for {Slug}: {Key}", slug, existing.Key);
+        }
+        else
+        {
+            var changed = false;
+            if (existing.PlanId != plan.Id) { existing.PlanId = plan.Id; changed = true; }
+            if (existing.Status != LicenseStatus.Active) { existing.Status = LicenseStatus.Active; changed = true; }
+            if (existing.ExpiresAt < DateTime.UtcNow.AddYears(50)) { existing.ExpiresAt = DateTime.UtcNow.AddYears(75); changed = true; }
+            if (existing.InstalledDomain != domain) { existing.InstalledDomain = domain; changed = true; }
+            if (changed) await db.SaveChangesAsync();
+        }
+    }
 }
 
 static async Task EnsureBootstrapAdminAsync(IServiceProvider services, AppDbContext db)
