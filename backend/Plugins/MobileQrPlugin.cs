@@ -303,7 +303,7 @@ namespace VerifyHub.MobilePlugin
             return app;
         }
 
-        private static string GetDesktopPage(MobilePluginOptions opts) => $$"""
+        private static string GetDesktopPage(MobilePluginOptions opts) => $$$"""
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mobile QR Verification</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -391,7 +391,7 @@ function startTimer(sec){clearInterval(qrTimer);const el=document.getElementById
 </script></body></html>
 """;
 
-        private static string GetMobilePage(MobilePluginOptions opts, string token) => $$"""
+        private static string GetMobilePage(MobilePluginOptions opts, string token) => $$$"""
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="theme-color" content="#07090f">
 <title>Mobile Verification — {{opts.CompanyName}}</title>
 <style>

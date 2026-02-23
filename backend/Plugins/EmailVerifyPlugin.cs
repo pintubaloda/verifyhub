@@ -462,7 +462,7 @@ namespace VerifyHub.EmailPlugin
             return app;
         }
 
-        private static string GetVerifyPage(EmailPluginOptions opts) => $$"""
+        private static string GetVerifyPage(EmailPluginOptions opts) => $$$"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
