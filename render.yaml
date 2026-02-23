@@ -6,10 +6,9 @@ databases:
 services:
   - type: web
     name: verifyhub-api
-    runtime: native
+    runtime: docker
     rootDir: backend
-    buildCommand: dotnet restore && dotnet publish -c Release -o out
-    startCommand: dotnet out/VerifyHubPortal.dll
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
@@ -28,7 +27,7 @@ services:
     name: verifyhub-frontend
     runtime: static
     rootDir: frontend
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
