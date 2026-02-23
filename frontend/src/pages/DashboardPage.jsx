@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { apiFetch } from '../utils/api'
+import { apiFetch, apiUrl } from '../utils/api'
 
 const API = (path, opts = {}) => {
   const token = localStorage.getItem('vh_access')
@@ -402,7 +402,7 @@ function VerifyUserTab() {
 
   const sendMagicLink = async () => {
     try {
-      const r = await fetch('/magiclink/send', {
+      const r = await apiFetch('/magiclink/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: emailInput }),
@@ -473,7 +473,7 @@ function VerifyUserTab() {
           <button onClick={sendMagicLink} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'linear-gradient(135deg,#4F8FFF,#B06AFF)', color:'#fff', fontWeight:700, cursor:'pointer' }}>
             Send Magic Link
           </button>
-          <a href="/magiclink/verify" target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
+          <a href={apiUrl('/magiclink/verify')} target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
             Open Email Plugin UI
           </a>
           <button onClick={markEmailDone} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'#162040', color:'#fff', fontWeight:700, cursor:'pointer' }}>
@@ -485,7 +485,7 @@ function VerifyUserTab() {
       <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20 }}>
         <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Step 2: Mobile QR Verification (Plugin UI)</h3>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
-          <a href="/mobileverify" target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
+          <a href={apiUrl('/mobileverify')} target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
             Open Mobile QR Plugin UI
           </a>
           <button onClick={markMobileDone} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'#162040', color:'#fff', fontWeight:700, cursor:'pointer' }}>
