@@ -217,8 +217,7 @@ static string BuildNpgsqlConnectionString(string databaseUrl)
         Username = username,
         Password = password,
         Database = database,
-        SslMode = Enum.TryParse<SslMode>(sslMode, ignoreCase: true, out var mode) ? mode : SslMode.Require,
-        TrustServerCertificate = true
+        SslMode = Enum.TryParse<SslMode>(sslMode, ignoreCase: true, out var mode) ? mode : SslMode.Require
     };
     return builder.ConnectionString;
 }
