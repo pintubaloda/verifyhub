@@ -729,10 +729,22 @@ namespace VerifyHubPortal.Controllers
             if (keyExists)
                 return Conflict(new { error = "This key already exists." });
 
+            if (string.IsNullOrWhiteSpace(req.Domain))
+                return BadRequest(new { error = "Domain is required." });
+
+            var normalizedDomain = NormalizeDomain(req.Domain);
+            if (string.IsNullOrWhiteSpace(normalizedDomain))
+                return BadRequest(new { error = "Invalid domain." });
+
+            if (req.ExpiresAt.HasValue && req.ExpiresAt.Value <= DateTime.UtcNow)
+                return BadRequest(new { error = "Expiry must be in the future." });
+
             license.Key = newKey;
+            license.InstalledDomain = normalizedDomain;
+            if (req.ExpiresAt.HasValue) license.ExpiresAt = req.ExpiresAt.Value.ToUniversalTime();
             license.Status = LicenseStatus.Active;
             await _db.SaveChangesAsync();
-            return Ok(new { saved = true, key = license.Key });
+            return Ok(new { saved = true, key = license.Key, installedDomain = license.InstalledDomain, expiresAt = license.ExpiresAt });
         }
 
         [HttpPost("plans/{id}")]
@@ -857,8 +869,22 @@ namespace VerifyHubPortal.Controllers
             }
         }
 
+        private static string NormalizeDomain(string raw)
+        {
+            var domain = raw.Trim();
+            if (Uri.TryCreate(domain, UriKind.Absolute, out var uri))
+            {
+                domain = uri.Host;
+            }
+
+            var colon = domain.IndexOf(':');
+            if (colon > 0) domain = domain[..colon];
+            domain = domain.Trim().Trim('/').ToLowerInvariant();
+            return domain;
+        }
+
         public record UpdatePluginBaseDomainRequest(string BaseDomain);
-        public record UpdatePlatformLifetimeKeyRequest(string Key);
+        public record UpdatePlatformLifetimeKeyRequest(string Key, string Domain, DateTime? ExpiresAt);
         public record UpdatePlatformSmtpRequest(
             string Host,
             int Port,

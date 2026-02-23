@@ -622,7 +622,11 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   useEffect(() => {
     const next = {}
     for (const k of (platform?.lifetimeKeys || [])) {
-      next[k.id] = k.key
+      next[k.id] = {
+        key: k.key || '',
+        domain: k.installedDomain || '',
+        expiresAt: k.expiresAt ? new Date(k.expiresAt).toISOString().slice(0, 10) : '',
+      }
     }
     setKeyForm(next)
   }, [platform?.lifetimeKeys])
@@ -674,14 +678,19 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   }
 
   const savePlatformKey = async (id) => {
-    const key = (keyForm[id] || '').trim()
+    const payload = keyForm[id] || {}
+    const key = (payload.key || '').trim()
+    const domain = (payload.domain || '').trim()
+    const expiresAt = (payload.expiresAt || '').trim()
+
     if (!key) { toast.error('Key is required.'); return }
+    if (!domain) { toast.error('Domain is required.'); return }
 
     setKeySaving(prev => ({ ...prev, [id]: true }))
     try {
       const r = await API(`/api/admin/platform-keys/${id}`, {
         method: 'POST',
-        body: JSON.stringify({ key }),
+        body: JSON.stringify({ key, domain, expiresAt: expiresAt ? new Date(`${expiresAt}T00:00:00Z`).toISOString() : null }),
       })
       const d = await r.json()
       if (!r.ok) toast.error(d.error || 'Failed to update key.')
@@ -785,9 +794,21 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
               <div key={k.id} style={{ background:'#050810', border:'1px solid #162040', borderRadius:10, padding:10 }}>
                 <div style={{ color:'#F0F4FF', fontSize:13, fontWeight:700 }}>{k.product} ({k.keyPrefix})</div>
                 <input
-                  value={keyForm[k.id] ?? ''}
-                  onChange={e => setKeyForm(prev => ({ ...prev, [k.id]: e.target.value }))}
+                  value={keyForm[k.id]?.key ?? ''}
+                  onChange={e => setKeyForm(prev => ({ ...prev, [k.id]: { ...(prev[k.id] || {}), key: e.target.value } }))}
                   style={{ width:'100%', margin:'6px 0', fontFamily:'JetBrains Mono,monospace', background:'#0a0f1e', border:'1px solid #162040', color:'#4F8FFF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                />
+                <input
+                  value={keyForm[k.id]?.domain ?? ''}
+                  onChange={e => setKeyForm(prev => ({ ...prev, [k.id]: { ...(prev[k.id] || {}), domain: e.target.value } }))}
+                  placeholder="domain (e.g. verifyhub-3c9n.onrender.com)"
+                  style={{ width:'100%', marginBottom:6, background:'#0a0f1e', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
+                />
+                <input
+                  type="date"
+                  value={keyForm[k.id]?.expiresAt ?? ''}
+                  onChange={e => setKeyForm(prev => ({ ...prev, [k.id]: { ...(prev[k.id] || {}), expiresAt: e.target.value } }))}
+                  style={{ width:'100%', marginBottom:6, background:'#0a0f1e', border:'1px solid #162040', color:'#F0F4FF', padding:'6px 8px', borderRadius:8, fontSize:12 }}
                 />
                 <button
                   onClick={() => savePlatformKey(k.id)}
@@ -807,8 +828,8 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
                 >
                   {keySaving[k.id] ? 'Saving...' : `Save ${k.keyPrefix} Key`}
                 </button>
-                <div style={{ color:'#5A6A8A', fontSize:12 }}>Domain: {k.installedDomain || '-'}</div>
-                <div style={{ color:'#5A6A8A', fontSize:12 }}>Expires: {k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : '-'}</div>
+                <div style={{ color:'#5A6A8A', fontSize:12 }}>Current Domain: {k.installedDomain || '-'}</div>
+                <div style={{ color:'#5A6A8A', fontSize:12 }}>Current Expires: {k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : '-'}</div>
               </div>
             ))}
           </div>
