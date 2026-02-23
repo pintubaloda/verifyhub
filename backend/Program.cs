@@ -140,7 +140,7 @@ static string BuildNpgsqlConnectionString(string databaseUrl)
     var builder = new NpgsqlConnectionStringBuilder
     {
         Host = uri.Host,
-        Port = uri.Port,
+        Port = uri.Port > 0 ? uri.Port : 5432,
         Username = username,
         Password = password,
         Database = database,
