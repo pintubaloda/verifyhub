@@ -635,8 +635,8 @@ h2{font-size:22px;font-weight:700;margin-bottom:8px} .sub{color:#64748b;font-siz
     <div class="timer" id="timer">⏱ <span id="timer-val">5:00</span></div>
     <button class="btn" onclick="initQr()">↻ New QR Code</button>
     <div class="verified-box" id="verified-box">
-      <h3>✅ Mobile Verified!</h3>
-      <div style="color:#64748b;font-size:13px">Phone number confirmed</div>
+      <h3 id="verified-title">✅ Mobile Verified!</h3>
+      <div id="verified-note" style="color:#64748b;font-size:13px">Phone number confirmed</div>
       <div class="phone-big" id="verified-phone">—</div>
     </div>
   </div>
@@ -692,6 +692,8 @@ function setVerifiedUi(phone){
   setStatus('verified','✅ Verified!');
   clearInterval(qrTimer); clearInterval(statusPoll);
   const vb=document.getElementById('verified-box');vb.classList.add('show');
+  const vt=document.getElementById('verified-title'); if(vt) vt.textContent='✅ Thanks!';
+  const vn=document.getElementById('verified-note'); if(vn) vn.textContent='Verification complete. You can now close this window.';
   document.getElementById('verified-phone').textContent=phone||'—';
 }
 function setStatus(cls,txt){const p=document.getElementById('status-pill');p.className='status '+cls;document.getElementById('status-txt').textContent=txt;}
