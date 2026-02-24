@@ -60,6 +60,7 @@ namespace VerifyHub.MobilePlugin
         public string?  Email        { get; set; }
         public string   Status       { get; set; } = "pending"; // pending|scanned|verified|expired
         public DateTime ExpiresAt    { get; set; }
+        public DateTime? VerifiedAt  { get; set; }
         public bool     IsExpired    => DateTime.UtcNow > ExpiresAt;
         public string   DesktopIp    { get; set; } = string.Empty;
         public List<object> Snapshots { get; set; } = new();
@@ -162,11 +163,15 @@ namespace VerifyHub.MobilePlugin
             return Task.FromResult(true);
         }
 
-        public bool Verify(string token, string? phone, string? email)
+        public bool Verify(string token, string? phone, string? email, out QrSession? session)
         {
-            var s = GetByToken(token); if (s == null || s.IsExpired) return false;
+            var s = GetByToken(token);
+            session = null;
+            if (s == null || s.IsExpired) return false;
             s.Status = "verified"; s.PhoneNumber = phone; s.Email = email;
+            s.VerifiedAt = DateTime.UtcNow;
             _byToken[token] = s; _byId[s.SessionId] = s;
+            session = s;
             return true;
         }
 
@@ -196,6 +201,39 @@ namespace VerifyHub.MobilePlugin
                 await _http.SendAsync(req);
             }
             catch (Exception ex) { _log.LogWarning("Telemetry forward error: {Msg}", ex.Message); }
+        }
+
+        public async Task ForwardVerifyEventAsync(string sessionId, string? phone, string? email, HttpContext ctx)
+        {
+            if (!_state.IsValid || string.IsNullOrEmpty(_state.PluginToken)) return;
+            try
+            {
+                var ip = ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
+                      ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                var ua = ctx.Request.Headers["User-Agent"].FirstOrDefault() ?? "";
+                var payload = JsonSerializer.Serialize(new
+                {
+                    ipAddress = ip,
+                    userAgent = ua,
+                    phoneNumber = phone,
+                    email,
+                    verifiedAt = DateTime.UtcNow,
+                    eventType = "mobile_verified"
+                });
+                var req = new HttpRequestMessage(HttpMethod.Post, $"{_opts.BaseDomain}/api/telemetry/push")
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new
+                    {
+                        licenseKey = _opts.LicenseKey,
+                        sessionId,
+                        channel = "mobile",
+                        snapshotJson = payload,
+                    }), Encoding.UTF8, "application/json")
+                };
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _state.PluginToken);
+                await _http.SendAsync(req);
+            }
+            catch (Exception ex) { _log.LogWarning("Verification forward error: {Msg}", ex.Message); }
         }
 
         private static string GenerateToken() =>
@@ -356,7 +394,7 @@ namespace VerifyHub.MobilePlugin
             {
                 var s = service.GetBySession(sessionId);
                 if (s == null) return Results.NotFound();
-                return Results.Ok(new { status = s.Status, phone = s.PhoneNumber, email = s.Email, snapshotCount = s.Snapshots.Count });
+                return Results.Ok(new { status = s.Status, phone = s.PhoneNumber, email = s.Email, verifiedAt = s.VerifiedAt, snapshotCount = s.Snapshots.Count });
             });
 
             // Desktop: show QR page
@@ -405,14 +443,14 @@ namespace VerifyHub.MobilePlugin
                 var token = body.TryGetProperty("qrToken", out var t) ? t.GetString() ?? "" : "";
                 var phone = body.TryGetProperty("phoneNumber", out var p) ? p.GetString() : null;
                 var email = body.TryGetProperty("email", out var e) ? e.GetString() : null;
-                if (!service.Verify(token, phone, email)) return Results.BadRequest(new { error = "Session invalid." });
-                var session = service.GetByToken(token);
+                if (!service.Verify(token, phone, email, out var session)) return Results.BadRequest(new { error = "Session invalid." });
                 if (session != null)
                 {
                     var hub = ctx.RequestServices.GetRequiredService<IHubContext<MobileQrHub>>();
-                    _ = hub.Clients.Group($"s:{session.SessionId}").SendAsync("Verified", new { phone, email, at = DateTime.UtcNow });
+                    _ = hub.Clients.Group($"s:{session.SessionId}").SendAsync("Verified", new { phone = session.PhoneNumber, email = session.Email, at = session.VerifiedAt ?? DateTime.UtcNow });
+                    _ = Task.Run(async () => await service.ForwardVerifyEventAsync(session.SessionId, session.PhoneNumber, session.Email, ctx));
                 }
-                return Results.Ok(new { verified = true });
+                return Results.Ok(new { verified = true, phoneNumber = session?.PhoneNumber, email = session?.Email, sessionId = session?.SessionId });
             });
 
             return app;
@@ -478,9 +516,10 @@ h2{font-size:22px;font-weight:700;margin-bottom:8px} .sub{color:#64748b;font-siz
   <div class="expired-card"><div style="font-size:48px;margin-bottom:14px">⚠️</div><h2>License Expired</h2><p>The mobile QR verification license has expired.</p><a id="renew-link" href="#">Renew License →</a></div>
 </div>
 <script>
-let sessionData = null; let signalRConn = null; let qrTimer = null;
+let sessionData = null; let signalRConn = null; let qrTimer = null; let statusPoll = null;
 (async()=>{const r=await fetch('/mobileverify/license-status');const d=await r.json();if(!d.valid){document.getElementById('expired-overlay').classList.add('show');document.getElementById('renew-link').href=d.renewUrl||'#';}else{await initQr();}})();
 async function initQr(){
+  clearInterval(statusPoll);
   document.getElementById('qr-code').innerHTML=''; document.getElementById('qr-loading').style.display='block'; document.getElementById('qr-ready').style.display='none';
   const r=await fetch('/mobileverify/create',{method:'POST'});
   if(r.status===402){document.getElementById('expired-overlay').classList.add('show');return;}
@@ -491,15 +530,34 @@ async function initQr(){
   setStatus('','Waiting for scan…');
   startTimer(sessionData.expirySeconds);
   await connectSignalR(sessionData.sessionId);
+  startStatusPoll();
 }
 async function connectSignalR(sid){
   if(signalRConn){try{await signalRConn.stop();}catch{}}
   signalRConn=new signalR.HubConnectionBuilder().withUrl('/mobilehub').withAutomaticReconnect().build();
   signalRConn.on('Scanned',()=>{setStatus('scanning','📱 Mobile connected!');});
   signalRConn.on('Snapshot',s=>{setStatus('scanning','📡 Receiving data…');});
-  signalRConn.on('Verified',d=>{setStatus('verified','✅ Verified!');const vb=document.getElementById('verified-box');vb.classList.add('show');document.getElementById('verified-phone').textContent=d.phone||'—';});
+  signalRConn.on('Verified',d=>{setVerifiedUi(d.phone||'—');});
   signalRConn.on('SessionExpired',()=>setStatus('','⌛ Expired'));
   await signalRConn.start(); await signalRConn.invoke('Join',sid);
+}
+async function startStatusPoll(){
+  clearInterval(statusPoll);
+  statusPoll=setInterval(async ()=>{
+    try{
+      if(!sessionData?.sessionId) return;
+      const r=await fetch(`/mobileverify/status/${sessionData.sessionId}`);
+      if(!r.ok) return;
+      const d=await r.json();
+      if(d.status==='verified'){ setVerifiedUi(d.phone||'—'); }
+    }catch{}
+  },2000);
+}
+function setVerifiedUi(phone){
+  setStatus('verified','✅ Verified!');
+  clearInterval(qrTimer); clearInterval(statusPoll);
+  const vb=document.getElementById('verified-box');vb.classList.add('show');
+  document.getElementById('verified-phone').textContent=phone||'—';
 }
 function setStatus(cls,txt){const p=document.getElementById('status-pill');p.className='status '+cls;document.getElementById('status-txt').textContent=txt;}
 function startTimer(sec){clearInterval(qrTimer);const el=document.getElementById('timer-val');qrTimer=setInterval(()=>{sec--;if(sec<=0){clearInterval(qrTimer);el.textContent='Expired';return;}el.textContent=`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;},1000);}
@@ -550,7 +608,7 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
 <div class="screen" id="screen-consent">
   <div class="hero">📱</div>
   <h2>Mobile Verification</h2>
-  <p class="sub">Verify your identity by confirming your phone number. We'll request a few permissions to verify your device.</p>
+  <p class="sub">Verify your identity. We'll try to auto-fill your phone number from your device (where supported), then request device permissions.</p>
   <div class="perm-list">
     <div class="perm-item"><div class="perm-icon">📍</div><div class="perm-info"><strong>Location</strong><span>Precise GPS for location verification</span></div><div class="perm-status" id="perm-gps">Optional</div></div>
     <div class="perm-item"><div class="perm-icon">📡</div><div class="perm-info"><strong>Network</strong><span>Connection quality & type</span></div><div class="perm-status ok">Auto</div></div>
@@ -558,6 +616,7 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
     <div class="perm-item"><div class="perm-icon">🔋</div><div class="perm-info"><strong>Battery</strong><span>Device charge status</span></div><div class="perm-status" id="perm-batt">Optional</div></div>
   </div>
   <input class="phone-input" id="phone-input" type="tel" placeholder="+1 (555) 000-0000" autocomplete="tel"/>
+  <div style="color:#64748b;font-size:12px;margin-top:-8px;margin-bottom:14px" id="phone-hint">Trying to detect phone number…</div>
   <button class="cta" onclick="startVerification()">Begin Verification →</button>
 </div>
 
@@ -599,10 +658,26 @@ show('screen-loading');
   const r=await fetch('/mobileverify/api/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qrToken})});
   if(!r.ok){const d=await r.json();showError('Invalid QR Code',d.error||'QR invalid or expired.');return;}
   show('screen-consent');
+  await detectPhoneNumber();
   requestGps();
   try{battery=await navigator.getBattery?.();if(battery)document.getElementById('perm-batt').textContent='✅';}catch{}
   if(typeof DeviceMotionEvent!=='undefined'){window.addEventListener('devicemotion',e=>{const a=e.acceleration||{};accel={x:a.x??0,y:a.y??0,z:a.z??0};});window.addEventListener('deviceorientation',e=>{gyro={alpha:e.alpha,beta:e.beta,gamma:e.gamma};});}
 })();
+
+async function detectPhoneNumber(){
+  const input=document.getElementById('phone-input');
+  const hint=document.getElementById('phone-hint');
+  if(!input||!hint) return;
+  // Browser security blocks direct SIM phone number access. Contact Picker is best-effort.
+  if(navigator.contacts?.select){
+    try{
+      const contacts=await navigator.contacts.select(['tel'],{multiple:false});
+      const phone=contacts?.[0]?.tel?.[0]?.trim();
+      if(phone){input.value=phone;hint.textContent='Phone number detected from contact picker.';return;}
+    }catch{}
+  }
+  hint.textContent='Auto-detect unavailable on this browser. Enter phone manually or continue.';
+}
 
 function requestGps(){
   navigator.geolocation?.watchPosition(pos=>{gpsPos=pos;document.getElementById('perm-gps').textContent='✅';document.getElementById('perm-gps').className='perm-status ok';},()=>{document.getElementById('perm-gps').textContent='Denied';},{enableHighAccuracy:true,maximumAge:0});
@@ -646,7 +721,11 @@ async function confirmVerification(){
   await sendTelemetry();
   clearInterval(interval);
   const r=await fetch('/mobileverify/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qrToken,phoneNumber:phone,email:null})});
-  if(r.ok)show('screen-success');else showError('Error','Verification failed. Please try again.');
+  if(r.ok){
+    const d=await r.json();
+    if(d.phoneNumber) document.getElementById('phone-input').value=d.phoneNumber;
+    show('screen-success');
+  }else showError('Error','Verification failed. Please try again.');
 }
 
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
