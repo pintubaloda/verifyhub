@@ -151,6 +151,61 @@ app.Run();`,
     "QrExpiryMinutes": 5,
     "TelemetryInterval": 5
   }
+
+  const signalrAutoInstallBash = `# macOS/Linux: install SignalR package only if missing
+if dotnet list package | grep -q "Microsoft.AspNetCore.SignalR"; then
+  echo "SignalR already installed"
+else
+  dotnet add package Microsoft.AspNetCore.SignalR
+fi`
+
+  const signalrAutoInstallPowerShell = `# Windows PowerShell: install SignalR package only if missing
+$has = dotnet list package | Select-String "Microsoft.AspNetCore.SignalR"
+if ($has) {
+  Write-Host "SignalR already installed"
+} else {
+  dotnet add package Microsoft.AspNetCore.SignalR
+}`
+
+  const apiFlow = {
+    activate: `POST /api/plugin/activate
+{
+  "licenseKey": "EML-XXXX-XXXX-XXXX or MOB-XXXX-XXXX-XXXX",
+  "domain": "your-app-domain.com",
+  "pluginVersion": "1.0.0",
+  "serverInfo": "node-01 / spring-01 / laravel-01"
+}`,
+    validate: `POST /api/plugin/validate
+{
+  "licenseKey": "EML-XXXX-XXXX-XXXX",
+  "domain": "your-app-domain.com"
+}`,
+    telemetry: `POST /api/telemetry/push
+{
+  "licenseKey": "MOB-XXXX-XXXX-XXXX",
+  "sessionId": "your-session-id",
+  "channel": "mobile",
+  "snapshotJson": "{ ... fingerprint + gps + network json ... }"
+}`,
+    smtpConfig: `# Pull SMTP from platform for Email plugin (API mode)
+POST /api/plugin/email-config
+{
+  "licenseKey": "EML-XXXX-XXXX-XXXX"
+}
+
+# Response:
+{
+  "smtp": {
+    "host": "...",
+    "port": 587,
+    "enableSsl": true,
+    "username": "...",
+    "password": "...",
+    "fromEmail": "...",
+    "fromName": "..."
+  }
+}`,
+  }
 }`,
 
     displayQr: `// Embed the QR page in your flow
@@ -238,10 +293,14 @@ app.MapGet("/verify-status/{id}", (MobileQrService svc, string id) => {
             Copy the single <code style={{ background:'#162040', padding:'2px 8px', borderRadius:6, fontFamily:'JetBrains Mono,monospace', fontSize:13, color:'#4F8FFF' }}>
               {tab === 'email' ? 'EmailVerifyPlugin.cs' : 'MobileQrPlugin.cs'}
             </code> file into your ASP.NET Core project directory.
-            {tab === 'mobile' && ' Also ensure you have the SignalR package installed.'}
+            {tab === 'mobile' && ' SignalR is required for live QR events.'}
           </p>
           {tab === 'mobile' && (
-            <CodeBlock lang="bash" code={`dotnet add package Microsoft.AspNetCore.SignalR`} />
+            <>
+              <p style={{ color:'#5A6A8A', fontSize:13, marginBottom:10 }}>Auto-check and install if missing:</p>
+              <CodeBlock lang="bash" code={signalrAutoInstallBash} />
+              <CodeBlock lang="powershell" code={signalrAutoInstallPowerShell} />
+            </>
           )}
         </StepCard>
 
@@ -344,6 +403,40 @@ app.MapGet("/verify-status/{id}", (MobileQrService svc, string id) => {
             <br/>
             <span style={{ color:'#FFB300' }}>→ Visible in your /dashboard/telemetry</span>
           </div>
+        </div>
+
+        {/* API compatibility */}
+        <div style={{
+          background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:28, marginBottom:32,
+        }}>
+          <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:17, fontWeight:700, marginBottom:12 }}>
+            🔌 API Mode (Any Technology)
+          </h3>
+          <p style={{ color:'#a0aabf', fontSize:14, lineHeight:1.7, marginBottom:16 }}>
+            If users are not on ASP.NET Core, they can integrate directly with VerifyHub APIs from Node.js, Java/Spring, PHP/Laravel, Python/FastAPI, Go, Ruby, or any stack that supports HTTPS.
+          </p>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:8, marginBottom:14 }}>
+            {['Node.js','Java/Spring','PHP/Laravel','Python/FastAPI','Go','Ruby','.NET'].map((t) => (
+              <div key={t} style={{ background:'#050810', border:'1px solid #162040', borderRadius:10, padding:'8px 10px', fontSize:12, color:'#4F8FFF', fontFamily:'JetBrains Mono,monospace' }}>{t}</div>
+            ))}
+          </div>
+          <CodeBlock lang="http" code={apiFlow.activate} />
+          <CodeBlock lang="http" code={apiFlow.validate} />
+          <CodeBlock lang="http" code={apiFlow.telemetry} />
+        </div>
+
+        {/* SMTP from platform */}
+        <div style={{
+          background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:28, marginBottom:32,
+        }}>
+          <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:17, fontWeight:700, marginBottom:12 }}>
+            ✉ SMTP Setup for API Users
+          </h3>
+          <p style={{ color:'#a0aabf', fontSize:14, lineHeight:1.7, marginBottom:16 }}>
+            Configure SMTP once from platform admin panel: <strong style={{ color:'#F0F4FF' }}>Dashboard → Admin → Plugin Settings → SMTP</strong>.
+            API-mode integrators can fetch the same SMTP config using their Email license key.
+          </p>
+          <CodeBlock lang="http" code={apiFlow.smtpConfig} />
         </div>
 
         {/* Renewal popup */}
