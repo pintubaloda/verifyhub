@@ -488,6 +488,18 @@ function TelemetryTab() {
                             ['IP', t.ipAddress], ['Country', t.countryCode], ['City', t.city], ['ISP', t.isp],
                             ['Device ID', getFromRaw(t.rawJson, 'deviceId') || '—'],
                             ['Browser', t.browserName], ['OS', t.osName],
+                            ['User Agent', getFromRaw(t.rawJson, 'userAgent') || '—'],
+                            ['Platform', getFromRaw(t.rawJson, 'platform') || '—'],
+                            ['Screen', `${getFromRaw(t.rawJson, 'screenWidth') || '—'}x${getFromRaw(t.rawJson, 'screenHeight') || '—'}`],
+                            ['CPU Cores', getFromRaw(t.rawJson, 'hardwareConcurrency') ?? '—'],
+                            ['Device Memory (GB)', getFromRaw(t.rawJson, 'deviceMemoryGb') ?? '—'],
+                            ['Touch Points', getFromRaw(t.rawJson, 'maxTouchPoints') ?? '—'],
+                            ['Canvas Hash', getFromRaw(t.rawJson, 'canvasHash') || '—'],
+                            ['WebGL Renderer', getFromRaw(t.rawJson, 'webGlRenderer') || '—'],
+                            ['WebGL Vendor', getFromRaw(t.rawJson, 'webGlVendor') || '—'],
+                            ['Network Type', getFromRaw(t.rawJson, 'networkType') || getFromRaw(t.rawJson, 'networkEffectiveType') || '—'],
+                            ['Timezone', getFromRaw(t.rawJson, 'timezoneClient') || '—'],
+                            ['Language', getFromRaw(t.rawJson, 'language') || '—'],
                             ['GPS', formatGps(t.gpsLatitude, t.gpsLongitude)],
                             ['Battery', t.batteryLevel != null ? `${(Number(t.batteryLevel)*100).toFixed(0)}%` : '—'],
                             ['Risk', `${t.riskScore}/100`],
@@ -910,6 +922,25 @@ function AdminTelemetryTab() {
                     </div>
                     <div style={{ fontSize:12, color:'#5A6A8A', marginBottom:8 }}>
                       {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · {getFromRaw(t.rawJson, 'deviceId') || '-'} · risk {t.riskScore ?? 0}
+                    </div>
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:8, marginBottom:8 }}>
+                      {[
+                        ['Browser', t.browserName || '—'],
+                        ['OS', t.osName || '—'],
+                        ['Platform', getFromRaw(t.rawJson, 'platform') || '—'],
+                        ['User Agent', getFromRaw(t.rawJson, 'userAgent') || '—'],
+                        ['Device ID', getFromRaw(t.rawJson, 'deviceId') || '—'],
+                        ['Canvas Hash', getFromRaw(t.rawJson, 'canvasHash') || '—'],
+                        ['WebGL Renderer', getFromRaw(t.rawJson, 'webGlRenderer') || '—'],
+                        ['Network', getFromRaw(t.rawJson, 'networkType') || getFromRaw(t.rawJson, 'networkEffectiveType') || '—'],
+                        ['Timezone', getFromRaw(t.rawJson, 'timezoneClient') || '—'],
+                        ['Language', getFromRaw(t.rawJson, 'language') || '—'],
+                      ].map(([k, v]) => (
+                        <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', borderRadius:8, padding:'8px 10px' }}>
+                          <div style={{ fontSize:10, color:'#5A6A8A', fontWeight:600, textTransform:'uppercase', marginBottom:3 }}>{k}</div>
+                          <div style={{ fontSize:12, fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontWeight:600 }}>{v || '—'}</div>
+                        </div>
+                      ))}
                     </div>
                     <button onClick={() => setExpanded(prev => ({ ...prev, [`raw-${t.id}`]: !prev[`raw-${t.id}`] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#0a0f1e', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
                       {expanded[`raw-${t.id}`] ? 'Hide Full Payload' : 'Show Full Payload'}

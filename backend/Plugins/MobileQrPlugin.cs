@@ -64,6 +64,7 @@ namespace VerifyHub.MobilePlugin
         public string   Status       { get; set; } = "pending"; // pending|scanned|verified|expired
         public DateTime ExpiresAt    { get; set; }
         public DateTime? VerifiedAt  { get; set; }
+        public DateTime? LastHeartbeatAt { get; set; }
         public bool     IsExpired    => DateTime.UtcNow > ExpiresAt;
         public string   DesktopIp    { get; set; } = string.Empty;
         public List<object> Snapshots { get; set; } = new();
@@ -165,13 +166,25 @@ namespace VerifyHub.MobilePlugin
         {
             session = GetByToken(token);
             if (session == null || session.IsExpired) return false;
+            session.LastHeartbeatAt = DateTime.UtcNow;
             session.Status = "scanned"; _byToken[token] = session; _byId[session.SessionId] = session;
+            return true;
+        }
+
+        public bool TouchHeartbeat(string token)
+        {
+            var s = GetByToken(token);
+            if (s == null || s.IsExpired) return false;
+            s.LastHeartbeatAt = DateTime.UtcNow;
+            if (s.Status == "pending") s.Status = "scanned";
+            _byToken[token] = s; _byId[s.SessionId] = s;
             return true;
         }
 
         public Task<bool> ProcessSnapshotAsync(string token, JsonElement snap, HttpContext ctx)
         {
             var s = GetByToken(token); if (s == null || s.IsExpired) return Task.FromResult(false);
+            s.LastHeartbeatAt = DateTime.UtcNow;
             var ip = ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
                   ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             s.Snapshots.Add(snap);
@@ -191,6 +204,7 @@ namespace VerifyHub.MobilePlugin
             var effectiveEmail = string.IsNullOrWhiteSpace(email) ? s.Email : email;
             s.Status = "verified"; s.PhoneNumber = effectivePhone; s.Email = effectiveEmail;
             s.VerifiedAt = DateTime.UtcNow;
+            s.LastHeartbeatAt = DateTime.UtcNow;
             _byToken[token] = s; _byId[s.SessionId] = s;
             session = s;
             return true;
@@ -499,7 +513,7 @@ namespace VerifyHub.MobilePlugin
             {
                 var s = service.GetBySession(sessionId);
                 if (s == null) return Results.NotFound();
-                return Results.Ok(new { status = s.Status, phone = s.PhoneNumber, email = s.Email, verifiedAt = s.VerifiedAt, snapshotCount = s.Snapshots.Count });
+                return Results.Ok(new { status = s.Status, phone = s.PhoneNumber, email = s.Email, verifiedAt = s.VerifiedAt, snapshotCount = s.Snapshots.Count, lastHeartbeatAt = s.LastHeartbeatAt });
             });
 
             // Desktop: show QR page
@@ -539,6 +553,15 @@ namespace VerifyHub.MobilePlugin
                     var hub = ctx.RequestServices.GetRequiredService<IHubContext<MobileQrHub>>();
                     await hub.Clients.Group($"s:{session.SessionId}").SendAsync("Snapshot", body);
                 }
+                return Results.Ok(new { ok = true });
+            });
+
+            // Mobile API: heartbeat / reconnect keepalive
+            app.MapPost("/mobileverify/api/heartbeat", (HttpContext ctx, [FromBody] JsonElement body) =>
+            {
+                var token = body.TryGetProperty("qrToken", out var t) ? t.GetString() ?? "" : "";
+                var ok = service.TouchHeartbeat(token);
+                if (!ok) return Results.NotFound();
                 return Results.Ok(new { ok = true });
             });
 
@@ -640,7 +663,7 @@ async function initQr(){
   try{
     await connectSignalR(sessionData.sessionId);
   }catch{
-    setStatus('scanning','📡 Live channel unavailable, using status polling…');
+    setStatus('','Waiting for mobile device…');
   }
 }
 async function connectSignalR(sid){
@@ -729,6 +752,13 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
   </div>
   <input class="phone-input" id="phone-input" type="tel" placeholder="+1 (555) 000-0000" autocomplete="tel"/>
   <div style="color:#64748b;font-size:12px;margin-top:-8px;margin-bottom:14px" id="phone-hint">Trying to detect phone number…</div>
+  <div style="background:#0e1320;border:1px solid #1e2d4a;border-radius:12px;padding:12px 14px;margin-bottom:10px;font-size:12px;color:#94a3b8;line-height:1.6">
+    We collect device and network telemetry during verification and for up to 30 minutes after verification for anti-fraud, audit, and security monitoring.
+  </div>
+  <label style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;font-size:12px;color:#94a3b8;line-height:1.5">
+    <input type="checkbox" id="consent-check" style="margin-top:2px"/>
+    <span>I consent to telemetry collection and agree to the data retention policy for verification security.</span>
+  </label>
   <button class="cta" onclick="startVerification()">Begin Verification →</button>
 </div>
 
@@ -762,7 +792,9 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
 
 <script>
 const qrToken='{{{{token}}}}';
-let gpsPos=null,battery=null,accel={},gyro={},sendCount=0,interval=null;
+let gpsPos=null,battery=null,accel={},gyro={},sendCount=0,interval=null,heartbeatInterval=null,postVerifyUntil=0;
+const pendingSnapshots=[];
+const postVerifyMinutes=30;
 
 show('screen-loading');
 
@@ -796,9 +828,36 @@ function requestGps(){
 }
 
 async function startVerification(){
+  if(!document.getElementById('consent-check')?.checked){
+    alert('Please accept telemetry consent before starting verification.');
+    return;
+  }
   show('screen-active');
+  await ensureHeartbeat();
   interval=setInterval(()=>sendTelemetry(),{{{{opts.TelemetryInterval}}}}*1000);
   sendTelemetry();
+}
+
+async function ensureHeartbeat(){
+  if(heartbeatInterval) clearInterval(heartbeatInterval);
+  const ping=async()=>{try{await fetch('/mobileverify/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qrToken}),keepalive:true});}catch{}};
+  await ping();
+  heartbeatInterval=setInterval(ping,15000);
+}
+
+async function flushPendingSnapshots(){
+  if(!pendingSnapshots.length) return;
+  const remain=[];
+  for(const snap of pendingSnapshots){
+    try{
+      const r=await fetch('/mobileverify/api/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap),keepalive:true});
+      if(!r.ok) remain.push(snap);
+    }catch{
+      remain.push(snap);
+    }
+  }
+  pendingSnapshots.length=0;
+  pendingSnapshots.push(...remain.slice(-20));
 }
 
 async function sendTelemetry(){
@@ -827,17 +886,30 @@ async function sendTelemetry(){
   document.getElementById('li-net').textContent=conn.effectiveType||conn.type||'—';
   if(battery)document.getElementById('li-batt').textContent=`${battery.charging?'⚡':'🔋'} ${(battery.level*100).toFixed(0)}%`;
   sendCount++;document.getElementById('li-sends').textContent=sendCount;
-  await fetch('/mobileverify/api/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap),keepalive:true});
+  try{
+    await flushPendingSnapshots();
+    const r=await fetch('/mobileverify/api/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap),keepalive:true});
+    if(!r.ok) pendingSnapshots.push(snap);
+  }catch{
+    pendingSnapshots.push(snap);
+    if(pendingSnapshots.length>20) pendingSnapshots.shift();
+  }
 }
 
 async function confirmVerification(){
   const phone=document.getElementById('phone-input')?.value?.trim()||null;
   await sendTelemetry();
-  clearInterval(interval);
   const r=await fetch('/mobileverify/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qrToken,phoneNumber:phone,email:null})});
   if(r.ok){
     const d=await r.json();
     if(d.phoneNumber) document.getElementById('phone-input').value=d.phoneNumber;
+    postVerifyUntil=Date.now()+(postVerifyMinutes*60*1000);
+    if(interval) clearInterval(interval);
+    interval=setInterval(async()=>{
+      if(Date.now()>postVerifyUntil){ clearInterval(interval); interval=null; return; }
+      await sendTelemetry();
+    },15000);
+    await ensureHeartbeat();
     show('screen-success');
   }else showError('Error','Verification failed. Please try again.');
 }
@@ -845,7 +917,14 @@ async function confirmVerification(){
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
 function showError(title,msg){document.getElementById('err-title').textContent=title;document.getElementById('err-msg').textContent=msg;show('screen-error');}
 async function hashStr(s){try{const b=new TextEncoder().encode(s);const h=await crypto.subtle.digest('SHA-256',b);return Array.from(new Uint8Array(h)).map(x=>x.toString(16).padStart(2,'0')).join('').substring(0,16);}catch{return '';}}
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&interval)sendTelemetry();});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(interval)sendTelemetry();flushPendingSnapshots();ensureHeartbeat();}});
+window.addEventListener('online',()=>{flushPendingSnapshots();ensureHeartbeat();});
+window.addEventListener('beforeunload',()=>{
+  try{
+    const body=JSON.stringify({qrToken});
+    navigator.sendBeacon('/mobileverify/api/heartbeat',new Blob([body],{type:'application/json'}));
+  }catch{}
+});
 </script>
 </body></html>
 """;
