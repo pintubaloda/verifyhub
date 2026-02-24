@@ -753,7 +753,7 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
   <input class="phone-input" id="phone-input" type="tel" placeholder="+1 (555) 000-0000" autocomplete="tel"/>
   <div style="color:#64748b;font-size:12px;margin-top:-8px;margin-bottom:14px" id="phone-hint">Trying to detect phone number…</div>
   <div style="background:#0e1320;border:1px solid #1e2d4a;border-radius:12px;padding:12px 14px;margin-bottom:10px;font-size:12px;color:#94a3b8;line-height:1.6">
-    We collect device and network telemetry during verification and for up to 30 minutes after verification for anti-fraud, audit, and security monitoring.
+    We collect device and network telemetry during and shortly after verification for anti-fraud, audit, and security monitoring.
   </div>
   <label style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;font-size:12px;color:#94a3b8;line-height:1.5">
     <input type="checkbox" id="consent-check" style="margin-top:2px"/>
@@ -776,8 +776,8 @@ h2{font-size:24px;font-weight:700;margin-bottom:8px} .sub{font-size:14px;color:#
 <div class="screen" id="screen-success">
   <div style="text-align:center;padding:40px 0">
     <div style="font-size:64px;margin-bottom:16px">✅</div>
-    <h2 style="color:#10B981;margin-bottom:8px">Verified!</h2>
-    <p style="color:#64748b;font-size:14px">Your phone number has been verified successfully.</p>
+    <h2 style="color:#10B981;margin-bottom:8px" id="success-title">Verified!</h2>
+    <p style="color:#64748b;font-size:14px" id="success-msg">Your phone number has been verified successfully.</p>
   </div>
 </div>
 
@@ -911,6 +911,13 @@ async function confirmVerification(){
     },15000);
     await ensureHeartbeat();
     show('screen-success');
+    const t=document.getElementById('success-title'); if(t) t.textContent='Thanks!';
+    const m=document.getElementById('success-msg'); if(m) m.textContent='Verification is complete. This screen will close automatically.';
+    setTimeout(()=>{
+      try{ window.close(); }catch{}
+      const m2=document.getElementById('success-msg');
+      if(m2) m2.textContent='Verification is complete. You can now close this screen.';
+    },2000);
   }else showError('Error','Verification failed. Please try again.');
 }
 
