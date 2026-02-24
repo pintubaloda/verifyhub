@@ -8,6 +8,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using VerifyHub.EmailPlugin;
 using VerifyHubPortal.Data;
 using VerifyHubPortal.Models;
 using VerifyHubPortal.Services;
@@ -130,9 +131,10 @@ namespace VerifyHubPortal.Controllers
         private readonly AppDbContext _db;
         private readonly ILicenseService _licenseSvc;
         private readonly IPluginAuthService _pluginAuth;
+        private readonly EmailVerifyService _emailVerify;
 
-        public PortalController(AppDbContext db, ILicenseService ls, IPluginAuthService pa)
-        { _db = db; _licenseSvc = ls; _pluginAuth = pa; }
+        public PortalController(AppDbContext db, ILicenseService ls, IPluginAuthService pa, EmailVerifyService emailVerify)
+        { _db = db; _licenseSvc = ls; _pluginAuth = pa; _emailVerify = emailVerify; }
 
         private Guid UserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
@@ -213,8 +215,26 @@ namespace VerifyHubPortal.Controllers
             if (string.IsNullOrWhiteSpace(phone))
                 return BadRequest(new { error = "Phone number is required before generating QR." });
 
-            var token = CreateMobileBindingToken(user, phone);
+            var token = CreateVerifyBindingToken(user, user.Email, phone);
             return Ok(new { verifyToken = token, phoneNumber = phone });
+        }
+
+        [HttpPost("verification-status/email-start")]
+        public async Task<IActionResult> StartEmailVerification([FromBody] StartEmailVerificationRequest req)
+        {
+            var user = await _db.Users.FindAsync(UserId);
+            if (user == null) return NotFound();
+
+            var email = string.IsNullOrWhiteSpace(req.Email) ? user.Email : req.Email.Trim().ToLowerInvariant();
+            if (!string.Equals(email, user.Email, StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { error = "Email must match logged-in user email." });
+
+            var bindToken = CreateVerifyBindingToken(user, email, req.PhoneNumber?.Trim());
+            await _emailVerify.EnsureLicenseReadyAsync(Request.Host.Host, "1.0.0", Environment.MachineName);
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+            var (ok, error) = await _emailVerify.SendMagicLinkAsync(email, baseUrl, bindToken);
+            if (!ok) return BadRequest(new { error = error ?? "Failed to send magic link." });
+            return Ok(new { sent = true, email });
         }
 
         [HttpGet("licenses")]
@@ -306,15 +326,17 @@ namespace VerifyHubPortal.Controllers
         public record MarkEmailVerifiedRequest(string? Email);
         public record MarkMobileVerifiedRequest(string? SessionId);
         public record StartMobileVerificationRequest(string? PhoneNumber);
+        public record StartEmailVerificationRequest(string? Email, string? PhoneNumber);
 
-        private string CreateMobileBindingToken(User user, string phoneNumber)
+        private string CreateVerifyBindingToken(User user, string email, string? phoneNumber)
         {
             var secret = HttpContext.RequestServices.GetRequiredService<IConfiguration>()["Jwt:PluginSecret"]
                 ?? "change-this-plugin-secret-32chars";
             var payloadObj = new
             {
                 uid = user.Id.ToString(),
-                email = user.Email,
+                name = user.Name,
+                email = email,
                 phone = phoneNumber,
                 exp = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeSeconds()
             };

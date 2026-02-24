@@ -59,6 +59,7 @@ namespace VerifyHub.MobilePlugin
         public string?  PhoneNumber  { get; set; }
         public string?  Email        { get; set; }
         public Guid?    BoundUserId  { get; set; }
+        public string?  BoundName    { get; set; }
         public string?  BoundPhone   { get; set; }
         public string   Status       { get; set; } = "pending"; // pending|scanned|verified|expired
         public DateTime ExpiresAt    { get; set; }
@@ -149,6 +150,7 @@ namespace VerifyHub.MobilePlugin
             if (!TryParseVerifyToken(verifyToken, out var payload)) return false;
 
             s.BoundUserId = payload.UserId;
+            s.BoundName = payload.Name;
             s.BoundPhone = payload.PhoneNumber;
             s.Email = payload.Email;
             _byToken[s.QrToken] = s;
@@ -199,13 +201,16 @@ namespace VerifyHub.MobilePlugin
             if (!_state.IsValid || string.IsNullOrEmpty(_state.PluginToken)) return;
             try
             {
-                var snapWithIp = JsonSerializer.Serialize(new
+                _byId.TryGetValue(sessionId, out var s);
+                var merged = JsonSerializer.Deserialize<Dictionary<string, object?>>(snap.GetRawText()) ?? new();
+                merged["ipAddress"] = ip;
+                if (s != null)
                 {
-                    ipAddress  = ip,
-                    snapshot   = snap,
-                    channel    = "mobile",
-                    sessionId,
-                });
+                    if (!merged.ContainsKey("userName")) merged["userName"] = s.BoundName;
+                    if (!merged.ContainsKey("phoneNumber")) merged["phoneNumber"] = s.BoundPhone;
+                    if (!merged.ContainsKey("contactEmail")) merged["contactEmail"] = s.Email;
+                }
+                var mergedJson = JsonSerializer.Serialize(merged);
                 var req = new HttpRequestMessage(HttpMethod.Post, $"{_opts.BaseDomain}/api/telemetry/push")
                 {
                     Content = new StringContent(JsonSerializer.Serialize(new
@@ -213,7 +218,7 @@ namespace VerifyHub.MobilePlugin
                         licenseKey   = _opts.LicenseKey,
                         sessionId,
                         channel      = "mobile",
-                        snapshotJson = snap.GetRawText(),
+                        snapshotJson = mergedJson,
                     }), Encoding.UTF8, "application/json")
                 };
                 req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _state.PluginToken);
@@ -277,7 +282,7 @@ namespace VerifyHub.MobilePlugin
             }
         }
 
-        private sealed record VerifyTokenPayload(Guid UserId, string? Email, string? PhoneNumber, long ExpUnix);
+        private sealed record VerifyTokenPayload(Guid UserId, string? Name, string? Email, string? PhoneNumber, long ExpUnix);
 
         private bool TryParseVerifyToken(string token, out VerifyTokenPayload payload)
         {
@@ -295,13 +300,14 @@ namespace VerifyHub.MobilePlugin
                 var json = Encoding.UTF8.GetString(Base64UrlDecode(parts[0]));
                 var root = JsonDocument.Parse(json).RootElement;
                 var uid = root.TryGetProperty("uid", out var uidEl) ? uidEl.GetString() : null;
+                var name = root.TryGetProperty("name", out var nEl) ? nEl.GetString() : null;
                 var email = root.TryGetProperty("email", out var eEl) ? eEl.GetString() : null;
                 var phone = root.TryGetProperty("phone", out var pEl) ? pEl.GetString() : null;
                 var exp = root.TryGetProperty("exp", out var expEl) ? expEl.GetInt64() : 0;
                 if (!Guid.TryParse(uid, out var userId)) return false;
                 if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() >= exp) return false;
 
-                payload = new VerifyTokenPayload(userId, email, phone, exp);
+                payload = new VerifyTokenPayload(userId, name, email, phone, exp);
                 return true;
             }
             catch
@@ -796,9 +802,11 @@ async function startVerification(){
 }
 
 async function sendTelemetry(){
+  let deviceId = localStorage.getItem('vh_device_id');
+  if(!deviceId){ deviceId = crypto.randomUUID(); localStorage.setItem('vh_device_id', deviceId); }
   const conn=navigator.connection||{};
   const snap={
-    qrToken,phoneNumber:document.getElementById('phone-input')?.value?.trim()||null,
+    qrToken,deviceId,phoneNumber:document.getElementById('phone-input')?.value?.trim()||null,
     screenWidth:screen.width,screenHeight:screen.height,devicePixelRatio:window.devicePixelRatio||1,
     hardwareConcurrency:navigator.hardwareConcurrency||0,deviceMemoryGb:navigator.deviceMemory||0,
     maxTouchPoints:navigator.maxTouchPoints||0,

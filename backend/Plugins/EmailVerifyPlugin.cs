@@ -89,6 +89,9 @@ namespace VerifyHub.EmailPlugin
         public string Token       { get; set; } = string.Empty;
         public string Code        { get; set; } = string.Empty;
         public string Email       { get; set; } = string.Empty;
+        public Guid?  BoundUserId { get; set; }
+        public string? BoundName  { get; set; }
+        public string? BoundPhone { get; set; }
         public DateTime ExpiresAt { get; set; }
         public bool Used          { get; set; }
         public int  Attempts      { get; set; }
@@ -116,6 +119,7 @@ namespace VerifyHub.EmailPlugin
         public double? NetworkDownlinkMbps  { get; set; }
         public string  TimezoneClient     { get; set; } = string.Empty;
         public string  Orientation        { get; set; } = string.Empty;
+        public string  DeviceId           { get; set; } = string.Empty;
         public double? GpsLatitude        { get; set; }
         public double? GpsLongitude       { get; set; }
         public double? GpsAccuracyMeters  { get; set; }
@@ -231,7 +235,7 @@ namespace VerifyHub.EmailPlugin
         }
 
         // Send magic link email
-        public async Task<(bool ok, string? error)> SendMagicLinkAsync(string email, string baseUrl)
+        public async Task<(bool ok, string? error)> SendMagicLinkAsync(string email, string baseUrl, string? bindToken = null)
         {
             await ApplyPlatformOverridesAsync();
             if (!_state.IsValid) return (false, _state.Error ?? "License not active.");
@@ -246,11 +250,24 @@ namespace VerifyHub.EmailPlugin
 
             var tokenStr = GenerateToken();
             var code     = GenerateCode();
+            Guid? boundUserId = null;
+            string? boundName = null;
+            string? boundPhone = null;
+            if (!string.IsNullOrWhiteSpace(bindToken) && TryParseVerifyToken(bindToken, out var bind))
+            {
+                boundUserId = bind.UserId;
+                boundName = bind.Name;
+                boundPhone = bind.PhoneNumber;
+                if (!string.IsNullOrWhiteSpace(bind.Email)) email = bind.Email!;
+            }
             var record   = new TokenRecord
             {
                 Token     = tokenStr,
                 Code      = code,
                 Email     = email,
+                BoundUserId = boundUserId,
+                BoundName = boundName,
+                BoundPhone = boundPhone,
                 ExpiresAt = DateTime.UtcNow.AddMinutes(_opts.TokenExpiryMinutes),
             };
             _tokens[tokenStr] = record;
@@ -293,6 +310,10 @@ namespace VerifyHub.EmailPlugin
             if (!ok) { r.Attempts++; _tokens[tokenStr] = r; return (false, null, $"Wrong code. {5 - r.Attempts} attempts left."); }
 
             r.Used = true; _tokens[tokenStr] = r;
+            if (r.BoundUserId.HasValue)
+            {
+                _ = Task.Run(async () => await MarkBoundUserEmailVerifiedAsync(r.BoundUserId.Value));
+            }
             _ = Task.Delay(TimeSpan.FromMinutes(5)).ContinueWith(__ => _tokens.TryRemove(tokenStr, out _));
             return (true, r.Email, null);
         }
@@ -307,6 +328,7 @@ namespace VerifyHub.EmailPlugin
                       ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
                 var ua = ctx.Request.Headers["User-Agent"].FirstOrDefault() ?? "";
 
+                _tokens.TryGetValue(fp.Token ?? string.Empty, out var tokenRec);
                 var snapshot = JsonSerializer.Serialize(new
                 {
                     ipAddress            = ip,
@@ -332,11 +354,14 @@ namespace VerifyHub.EmailPlugin
                     networkDownlinkMbps  = fp.NetworkDownlinkMbps,
                     timezoneClient       = fp.TimezoneClient,
                     orientation          = fp.Orientation,
+                    deviceId             = fp.DeviceId,
                     gpsLatitude          = fp.GpsLatitude,
                     gpsLongitude         = fp.GpsLongitude,
                     gpsAccuracyMeters    = fp.GpsAccuracyMeters,
                     gpsPermission        = fp.GpsPermission,
-                    email                = (string?)null,  // filled when verified
+                    email                = tokenRec?.Email,
+                    userName             = tokenRec?.BoundName,
+                    phoneNumber          = tokenRec?.BoundPhone,
                 });
 
                 var push = JsonSerializer.Serialize(new
@@ -357,11 +382,74 @@ namespace VerifyHub.EmailPlugin
             catch (Exception ex) { _log.LogWarning("Telemetry forward failed: {Msg}", ex.Message); }
         }
 
+        private async Task MarkBoundUserEmailVerifiedAsync(Guid userId)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetService<AppDbContext>();
+                if (db == null) return;
+                var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+                if (user == null) return;
+                user.EmailVerified = true;
+                user.EmailVerifiedAt = DateTime.UtcNow;
+                if (user.MobileVerified && user.VerificationCompletedAt == null)
+                    user.VerificationCompletedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to mark bound user email verified");
+            }
+        }
+
+        private sealed record VerifyTokenPayload(Guid UserId, string? Name, string? Email, string? PhoneNumber, long ExpUnix);
+
+        private bool TryParseVerifyToken(string token, out VerifyTokenPayload payload)
+        {
+            payload = default!;
+            try
+            {
+                var parts = token.Split('.', 2);
+                if (parts.Length != 2) return false;
+                var secret = _cfg["Jwt:PluginSecret"] ?? "change-this-plugin-secret-32chars";
+                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+                var actualSig = Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(parts[0])));
+                if (!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(actualSig), Encoding.UTF8.GetBytes(parts[1])))
+                    return false;
+
+                var json = Encoding.UTF8.GetString(Base64UrlDecode(parts[0]));
+                var root = JsonDocument.Parse(json).RootElement;
+                var uid = root.TryGetProperty("uid", out var uidEl) ? uidEl.GetString() : null;
+                var name = root.TryGetProperty("name", out var nEl) ? nEl.GetString() : null;
+                var email = root.TryGetProperty("email", out var eEl) ? eEl.GetString() : null;
+                var phone = root.TryGetProperty("phone", out var pEl) ? pEl.GetString() : null;
+                var exp = root.TryGetProperty("exp", out var expEl) ? expEl.GetInt64() : 0;
+                if (!Guid.TryParse(uid, out var userId)) return false;
+                if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() >= exp) return false;
+                payload = new VerifyTokenPayload(userId, name, email, phone, exp);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static string GenerateToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).Replace("+", "-").Replace("/", "_").Replace("=", "");
         private static string GenerateCode()  { var b = new char[6]; var buf = RandomNumberGenerator.GetBytes(24); for (int i = 0; i < 6; i++) b[i] = (char)('0' + BitConverter.ToUInt32(buf, i*4) % 10); return new string(b); }
         private static bool ConstantEquals(string a, string b) { if (a.Length != b.Length) return false; int d = 0; for (int i = 0; i < a.Length; i++) d |= a[i] ^ b[i]; return d == 0; }
         private static string ParseBrowser(string ua) { if (ua.Contains("Chrome/")) return "Chrome"; if (ua.Contains("Firefox/")) return "Firefox"; if (ua.Contains("Safari/")) return "Safari"; return "Other"; }
         private static string ParseOs(string ua) { if (ua.Contains("Windows")) return "Windows"; if (ua.Contains("Android")) return "Android"; if (ua.Contains("iPhone") || ua.Contains("iPad")) return "iOS"; if (ua.Contains("Mac OS X")) return "macOS"; return "Other"; }
+        private static string Base64UrlEncode(byte[] data) =>
+            Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        private static byte[] Base64UrlDecode(string s)
+        {
+            var padded = s.Replace('-', '+').Replace('_', '/');
+            var mod = padded.Length % 4;
+            if (mod > 0) padded = padded.PadRight(padded.Length + (4 - mod), '=');
+            return Convert.FromBase64String(padded);
+        }
         public string GetRenewUrl(HttpContext? ctx = null)
         {
             var configured = Environment.GetEnvironmentVariable("PLATFORM_DASHBOARD_URL")
@@ -558,9 +646,10 @@ namespace VerifyHub.EmailPlugin
             {
                 var body  = await JsonSerializer.DeserializeAsync<JsonElement>(ctx.Request.Body);
                 var email = body.TryGetProperty("email", out var e) ? e.GetString() ?? "" : "";
+                var bindToken = body.TryGetProperty("bindToken", out var bt) ? bt.GetString() : null;
                 var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
                 await service.EnsureLicenseReadyAsync(ctx.Request.Host.Host, "1.0.0", Environment.MachineName);
-                var (ok, error) = await service.SendMagicLinkAsync(email, baseUrl);
+                var (ok, error) = await service.SendMagicLinkAsync(email, baseUrl, bindToken);
                 return ok ? Results.Ok(new { sent = true }) : Results.BadRequest(new { error });
             });
 
@@ -768,8 +857,11 @@ async function doVerify() {
 }
 
 async function collectAndForwardFingerprint(token) {
+  let deviceId = localStorage.getItem('vh_device_id');
+  if(!deviceId){ deviceId = crypto.randomUUID(); localStorage.setItem('vh_device_id', deviceId); }
   const fp = {
     token,
+    deviceId,
     screenWidth: screen.width, screenHeight: screen.height, devicePixelRatio: window.devicePixelRatio||1,
     hardwareConcurrency: navigator.hardwareConcurrency||0,
     language: navigator.language, platform: navigator.platform,

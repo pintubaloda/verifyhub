@@ -306,6 +306,22 @@ function TelemetryTab() {
       return []
     }
   }
+  const getFromRaw = (raw, key) => {
+    try {
+      const obj = JSON.parse(raw || '{}')
+      return obj?.[key]
+    } catch {
+      return null
+    }
+  }
+  const getFromRaw = (raw, key) => {
+    try {
+      const obj = JSON.parse(raw || '{}')
+      return obj?.[key]
+    } catch {
+      return null
+    }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -370,7 +386,7 @@ function TelemetryTab() {
                 <div style={{ display:'flex', gap:10, alignItems:'center' }}>
                   <span style={{ fontSize:18 }}>{t.channel === 'email' ? '✉' : '📱'}</span>
                   <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:15 }}>
-                    {t.userEmail || t.userPhone || 'Anonymous'}
+                    {getFromRaw(t.rawJson, 'userName') || t.userEmail || t.userPhone || 'Anonymous'}
                   </span>
                   <span style={{ background:'#162040', padding:'2px 10px', borderRadius:8, fontSize:11, color:'#5A6A8A' }}>
                     {t.channel}
@@ -383,6 +399,9 @@ function TelemetryTab() {
               <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:8 }}>
                 {[
                   ['IP', t.ipAddress], ['Country', t.countryCode], ['City', t.city], ['ISP', t.isp],
+                  ['Device ID', getFromRaw(t.rawJson, 'deviceId') || '—'],
+                  ['Email', t.userEmail || getFromRaw(t.rawJson, 'contactEmail') || '—'],
+                  ['Mobile', t.userPhone || getFromRaw(t.rawJson, 'phoneNumber') || '—'],
                   ['Browser', t.browserName], ['OS', t.osName],
                   ['Device', t.isMobile?'📱 Mobile':'🖥 Desktop'],
                   ['GPS', t.gpsLatitude ? `${t.gpsLatitude?.toFixed(4)}, ${t.gpsLongitude?.toFixed(4)}` : '—'],
@@ -530,10 +549,9 @@ function VerifyUserTab() {
 
   const sendMagicLink = async () => {
     try {
-      const r = await apiFetch('/magiclink/send', {
+      const r = await API('/api/portal/verification-status/email-start', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailInput }),
+        body: JSON.stringify({ email: emailInput, phoneNumber: phoneInput || null }),
       })
       const d = await r.json()
       if (!r.ok) toast.error(d.error || 'Failed to send magic link.')
@@ -763,11 +781,11 @@ function AdminTelemetryTab() {
       ) : items.map(t => (
         <div key={t.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
           <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
-            <div style={{ fontSize:13, color:'#F0F4FF' }}>{t.channel} · {t.pluginDomain || '-'}</div>
+            <div style={{ fontSize:13, color:'#F0F4FF' }}>{t.channel} · {t.pluginDomain || '-'} · {(getFromRaw(t.rawJson, 'userName') || t.userEmail || t.userPhone || 'Anonymous')}</div>
             <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(t.receivedAt).toLocaleString()}</div>
           </div>
           <div style={{ fontSize:12, color:'#5A6A8A', marginTop:6 }}>
-            {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · risk {t.riskScore ?? 0}
+            {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · {getFromRaw(t.rawJson, 'deviceId') || '-'} · risk {t.riskScore ?? 0}
           </div>
           <div style={{ marginTop:10 }}>
             <button onClick={() => setExpanded(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
