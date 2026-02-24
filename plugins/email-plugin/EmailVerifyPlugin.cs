@@ -233,9 +233,16 @@ namespace VerifyHub.EmailPlugin
         // Send magic link email
         public async Task<(bool ok, string? error)> SendMagicLinkAsync(string email, string baseUrl)
         {
+            await ApplyPlatformOverridesAsync();
             if (!_state.IsValid) return (false, _state.Error ?? "License not active.");
             email = email.Trim().ToLower();
             if (!email.Contains('@')) return (false, "Invalid email.");
+            if (string.IsNullOrWhiteSpace(_opts.Smtp.Host))
+                return (false, "SMTP host is not configured.");
+            if (string.IsNullOrWhiteSpace(_opts.Smtp.FromEmail))
+                return (false, "SMTP from email is not configured.");
+            if (_opts.Smtp.Port <= 0)
+                return (false, "SMTP port is invalid.");
 
             var tokenStr = GenerateToken();
             var code     = GenerateCode();
@@ -412,6 +419,22 @@ namespace VerifyHub.EmailPlugin
                 {
                     _opts.LicenseKey = license.Key.Trim();
                 }
+
+                var smtpHost = await GetSettingAsync(db, "platform.smtp.host");
+                var smtpPortRaw = await GetSettingAsync(db, "platform.smtp.port");
+                var smtpSslRaw = await GetSettingAsync(db, "platform.smtp.enableSsl");
+                var smtpUser = await GetSettingAsync(db, "platform.smtp.username");
+                var smtpPass = await GetSettingAsync(db, "platform.smtp.password");
+                var smtpFromEmail = await GetSettingAsync(db, "platform.smtp.fromEmail");
+                var smtpFromName = await GetSettingAsync(db, "platform.smtp.fromName");
+
+                if (!string.IsNullOrWhiteSpace(smtpHost)) _opts.Smtp.Host = smtpHost.Trim();
+                if (int.TryParse(smtpPortRaw, out var smtpPort) && smtpPort > 0) _opts.Smtp.Port = smtpPort;
+                if (bool.TryParse(smtpSslRaw, out var smtpSsl)) _opts.Smtp.EnableSsl = smtpSsl;
+                if (!string.IsNullOrWhiteSpace(smtpUser)) _opts.Smtp.Username = smtpUser.Trim();
+                if (!string.IsNullOrWhiteSpace(smtpPass)) _opts.Smtp.Password = smtpPass;
+                if (!string.IsNullOrWhiteSpace(smtpFromEmail)) _opts.Smtp.FromEmail = smtpFromEmail.Trim();
+                if (!string.IsNullOrWhiteSpace(smtpFromName)) _opts.Smtp.FromName = smtpFromName.Trim();
             }
             catch (Exception ex)
             {

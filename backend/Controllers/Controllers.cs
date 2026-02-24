@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Data;
+using System.Net;
+using System.Net.Mail;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
@@ -770,6 +772,53 @@ namespace VerifyHubPortal.Controllers
             return Ok(new { saved = true });
         }
 
+        [HttpPost("plugin-settings/smtp/test")]
+        public async Task<IActionResult> TestPlatformSmtp([FromBody] TestPlatformSmtpRequest req)
+        {
+            var host = req.Host?.Trim() ?? "";
+            var fromEmail = req.FromEmail?.Trim() ?? "";
+            var testEmail = req.TestEmail?.Trim() ?? "";
+            var username = req.Username?.Trim() ?? "";
+            var fromName = string.IsNullOrWhiteSpace(req.FromName) ? "VerifyHub" : req.FromName.Trim();
+
+            if (string.IsNullOrWhiteSpace(host)) return BadRequest(new { error = "SMTP host is required." });
+            if (req.Port <= 0) return BadRequest(new { error = "SMTP port must be > 0." });
+            if (string.IsNullOrWhiteSpace(fromEmail)) return BadRequest(new { error = "From email is required." });
+            if (string.IsNullOrWhiteSpace(testEmail)) return BadRequest(new { error = "Test email is required." });
+
+            var password = req.Password ?? "";
+            if (string.IsNullOrWhiteSpace(password))
+            {
+                password = await GetSettingAsync("platform.smtp.password") ?? "";
+            }
+
+            try
+            {
+                using var smtp = new SmtpClient(host, req.Port)
+                {
+                    EnableSsl = req.EnableSsl,
+                    Credentials = new NetworkCredential(username, password),
+                };
+
+                var body = $"VerifyHub SMTP test at {DateTime.UtcNow:u}";
+                using var msg = new MailMessage(
+                    new MailAddress(fromEmail, fromName),
+                    new MailAddress(testEmail))
+                {
+                    Subject = "VerifyHub SMTP Test",
+                    Body = body,
+                    IsBodyHtml = false,
+                };
+
+                await smtp.SendMailAsync(msg);
+                return Ok(new { sent = true });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = $"SMTP test failed: {ex.Message}" });
+            }
+        }
+
         [HttpPost("platform-keys/{id}")]
         public async Task<IActionResult> UpdatePlatformLifetimeKey(Guid id, [FromBody] UpdatePlatformLifetimeKeyRequest req)
         {
@@ -951,6 +1000,16 @@ namespace VerifyHubPortal.Controllers
             string? Password,
             string FromEmail,
             string? FromName
+        );
+        public record TestPlatformSmtpRequest(
+            string Host,
+            int Port,
+            bool EnableSsl,
+            string? Username,
+            string? Password,
+            string FromEmail,
+            string? FromName,
+            string TestEmail
         );
         public record UpdatePlanRequest(
             string Name,

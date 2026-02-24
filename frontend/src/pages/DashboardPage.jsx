@@ -642,6 +642,8 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
   const [baseDomain, setBaseDomain] = useState(defaults?.baseDomain || '')
   const [saving, setSaving] = useState(false)
   const [smtpSaving, setSmtpSaving] = useState(false)
+  const [smtpTesting, setSmtpTesting] = useState(false)
+  const [smtpTestEmail, setSmtpTestEmail] = useState('')
   const [smtpForm, setSmtpForm] = useState({
     host: '',
     port: 587,
@@ -746,6 +748,37 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
       toast.error('Network error while saving SMTP settings.')
     } finally {
       setSmtpSaving(false)
+    }
+  }
+
+  const testSmtp = async () => {
+    setSmtpTesting(true)
+    try {
+      if (!smtpTestEmail.trim()) {
+        toast.error('Enter test email.')
+        return
+      }
+      const body = {
+        host: smtpForm.host,
+        port: Number(smtpForm.port),
+        enableSsl: !!smtpForm.enableSsl,
+        username: smtpForm.username || '',
+        password: smtpForm.password || '',
+        fromEmail: smtpForm.fromEmail,
+        fromName: smtpForm.fromName || 'VerifyHub',
+        testEmail: smtpTestEmail.trim(),
+      }
+      const r = await API('/api/admin/plugin-settings/smtp/test', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      const d = await r.json()
+      if (!r.ok) toast.error(d.error || 'SMTP test failed.')
+      else toast.success('SMTP test email sent.')
+    } catch {
+      toast.error('Network error during SMTP test.')
+    } finally {
+      setSmtpTesting(false)
     }
   }
 
@@ -936,6 +969,21 @@ function AdminPluginSettingsTab({ settings, onRefresh }) {
             style={{ padding:'10px 14px', borderRadius:10, border:'none', cursor:smtpSaving ? 'not-allowed' : 'pointer', background:smtpSaving ? '#162040' : 'linear-gradient(135deg,#4F8FFF,#B06AFF)', color:'#fff', fontSize:13, fontWeight:700 }}
           >
             {smtpSaving ? 'Saving...' : 'Save SMTP Settings'}
+          </button>
+        </div>
+        <div style={{ display:'flex', gap:8, alignItems:'center', marginTop:10, flexWrap:'wrap' }}>
+          <input
+            value={smtpTestEmail}
+            onChange={e => setSmtpTestEmail(e.target.value)}
+            placeholder="test@yourdomain.com"
+            style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12, minWidth:220 }}
+          />
+          <button
+            onClick={testSmtp}
+            disabled={smtpTesting}
+            style={{ padding:'9px 12px', borderRadius:8, border:'1px solid #162040', cursor:smtpTesting ? 'not-allowed' : 'pointer', background:smtpTesting ? '#162040' : '#0f1730', color:'#F0F4FF', fontSize:12, fontWeight:700 }}
+          >
+            {smtpTesting ? 'Testing...' : 'Send SMTP Test'}
           </button>
         </div>
       </div>
