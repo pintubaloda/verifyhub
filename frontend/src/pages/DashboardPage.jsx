@@ -505,7 +505,7 @@ function BillingTab() {
   )
 }
 
-function VerifyUserTab() {
+function VerifyUserTab({ user }) {
   const [status, setStatus] = useState(null)
   const [emailInput, setEmailInput] = useState('')
   const [phoneInput, setPhoneInput] = useState('')
@@ -519,11 +519,14 @@ function VerifyUserTab() {
         const d = await r.json()
         setStatus(d)
         setEmailInput(d.email || '')
+        const profilePhone = d.phoneNumber || user?.phoneNumber || ''
+        setPhoneInput(profilePhone)
         const cached = localStorage.getItem('vh_user')
         if (cached) {
           const parsed = JSON.parse(cached)
           localStorage.setItem('vh_user', JSON.stringify({
             ...parsed,
+            phoneNumber: profilePhone || parsed.phoneNumber || null,
             emailVerified: !!d.emailVerified,
             emailVerifiedAt: d.emailVerifiedAt || null,
             mobileVerified: !!d.mobileVerified,
@@ -540,11 +543,19 @@ function VerifyUserTab() {
 
   const sendMagicLink = async () => {
     try {
+      if (status?.exempt) {
+        toast('Owner/admin account is exempt from platform verification.')
+        return
+      }
       const r = await API('/api/portal/verification-status/email-start', {
         method: 'POST',
         body: JSON.stringify({ email: emailInput, phoneNumber: phoneInput || null }),
       })
       const d = await r.json()
+      if (d?.skipped) {
+        toast('Owner/admin account is exempt from platform verification.')
+        return
+      }
       if (!r.ok) toast.error(d.error || 'Failed to send magic link.')
       else toast.success('Magic link sent. Complete email verification from your inbox.')
     } catch {
@@ -582,15 +593,24 @@ function VerifyUserTab() {
 
   const startMobileFlow = async () => {
     try {
-      if (!phoneInput.trim()) {
-        toast.error('Enter phone number before generating QR.')
+      if (status?.exempt) {
+        toast('Owner/admin account is exempt from platform verification.')
+        return
+      }
+      const phone = phoneInput.trim()
+      if (!phone) {
+        toast.error('No mobile number in profile. Enter mobile number to continue.')
         return
       }
       const r = await API('/api/portal/verification-status/mobile-start', {
         method: 'POST',
-        body: JSON.stringify({ phoneNumber: phoneInput.trim() }),
+        body: JSON.stringify({ phoneNumber: phone }),
       })
       const d = await r.json()
+      if (d?.skipped) {
+        toast('Owner/admin account is exempt from platform verification.')
+        return
+      }
       if (!r.ok) {
         toast.error(d.error || 'Failed to start mobile verification.')
         return
@@ -606,6 +626,11 @@ function VerifyUserTab() {
   return (
     <div>
       <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Verify User</h2>
+      {status?.exempt && (
+        <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16, color:'#5A6A8A', fontSize:13 }}>
+          This account is exempt from verification because it is a platform owner/admin account.
+        </div>
+      )}
 
       <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20, marginBottom:16 }}>
         <div style={{ fontSize:13, color:'#5A6A8A', marginBottom:12 }}>Current status</div>
@@ -648,7 +673,7 @@ function VerifyUserTab() {
           <input
             value={phoneInput}
             onChange={e => setPhoneInput(e.target.value)}
-            placeholder="user mobile number"
+            placeholder={status?.phoneNumber ? 'profile mobile number' : 'enter mobile number (not found in profile)'}
             style={{ minWidth:240, background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'10px 12px', borderRadius:10, fontSize:13 }}
           />
           <button onClick={startMobileFlow} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'linear-gradient(135deg,#4F8FFF,#00C896)', color:'#fff', fontWeight:700, cursor:'pointer' }}>
@@ -1289,6 +1314,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user || isAdmin) return
+    if (user.isPlatformOwner) return
     if (!user.emailVerified || !user.mobileVerified || !user.verificationCompletedAt) {
       setActive('verify-user')
     }
@@ -1336,7 +1362,7 @@ export default function DashboardPage() {
       <Sidebar active={active} setActive={setActive} user={user} onLogout={logout} />
       <main style={{ marginLeft:240, flex:1, padding:'32px 40px', overflowY:'auto' }}>
         {!isAdmin && active === 'overview'  && <OverviewTab  stats={stats} />}
-        {!isAdmin && active === 'verify-user' && <VerifyUserTab />}
+        {!isAdmin && active === 'verify-user' && <VerifyUserTab user={user} />}
         {!isAdmin && active === 'licenses'  && <LicensesTab  licenses={licenses} onRefresh={loadData} />}
         {!isAdmin && active === 'telemetry' && <TelemetryTab />}
         {!isAdmin && active === 'orders'    && <OrdersTab />}

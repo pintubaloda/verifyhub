@@ -24,9 +24,10 @@ namespace VerifyHubPortal.Controllers
         private readonly AppDbContext _db;
         private readonly ITokenService _tokens;
         private readonly ILogger<AuthController> _log;
+        private readonly IConfiguration _cfg;
 
-        public AuthController(AppDbContext db, ITokenService tokens, ILogger<AuthController> log)
-        { _db = db; _tokens = tokens; _log = log; }
+        public AuthController(AppDbContext db, ITokenService tokens, ILogger<AuthController> log, IConfiguration cfg)
+        { _db = db; _tokens = tokens; _log = log; _cfg = cfg; }
 
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterRequest req)
@@ -39,14 +40,15 @@ namespace VerifyHubPortal.Controllers
                 Name         = req.Name.Trim(),
                 Email        = req.Email.Trim().ToLower(),
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password),
-                Company      = req.Company?.Trim()
+                Company      = req.Company?.Trim(),
+                PhoneNumber  = string.IsNullOrWhiteSpace(req.PhoneNumber) ? null : req.PhoneNumber.Trim()
             };
             _db.Users.Add(user);
             await _db.SaveChangesAsync();
 
             var access  = _tokens.GenerateAccessToken(user);
             var refresh = await CreateRefreshAsync(user.Id);
-            return Ok(new AuthResponse(access, refresh, ToDto(user)));
+            return Ok(new AuthResponse(access, refresh, ToDto(user, _cfg)));
         }
 
         [HttpPost("login")]
@@ -59,7 +61,7 @@ namespace VerifyHubPortal.Controllers
 
             var access  = _tokens.GenerateAccessToken(user);
             var refresh = await CreateRefreshAsync(user.Id);
-            return Ok(new AuthResponse(access, refresh, ToDto(user)));
+            return Ok(new AuthResponse(access, refresh, ToDto(user, _cfg)));
         }
 
         [HttpPost("refresh")]
@@ -91,10 +93,19 @@ namespace VerifyHubPortal.Controllers
             return token.Token;
         }
 
-        private static UserDto ToDto(User u) => new(
-            u.Id, u.Name, u.Email, u.Company, u.Role, u.CreatedAt,
-            u.EmailVerified, u.EmailVerifiedAt, u.MobileVerified, u.MobileVerifiedAt, u.VerificationCompletedAt
+        private static UserDto ToDto(User u, IConfiguration cfg) => new(
+            u.Id, u.Name, u.Email, u.PhoneNumber, u.Company, u.Role, u.CreatedAt,
+            u.EmailVerified, u.EmailVerifiedAt, u.MobileVerified, u.MobileVerifiedAt, u.VerificationCompletedAt,
+            IsPlatformOwner(u, cfg)
         );
+
+        private static bool IsPlatformOwner(User u, IConfiguration cfg)
+        {
+            var ownerEmail = (Environment.GetEnvironmentVariable("PLATFORM_OWNER_EMAIL")
+                ?? cfg["PlatformOwner:Email"]
+                ?? "platform@verifyhub.local").Trim().ToLowerInvariant();
+            return string.Equals(u.Email, ownerEmail, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     // ══════════════════════════════════════════════════════════
@@ -144,8 +155,9 @@ namespace VerifyHubPortal.Controllers
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
             return Ok(new UserDto(
-                user.Id, user.Name, user.Email, user.Company, user.Role, user.CreatedAt,
-                user.EmailVerified, user.EmailVerifiedAt, user.MobileVerified, user.MobileVerifiedAt, user.VerificationCompletedAt
+                user.Id, user.Name, user.Email, user.PhoneNumber, user.Company, user.Role, user.CreatedAt,
+                user.EmailVerified, user.EmailVerifiedAt, user.MobileVerified, user.MobileVerifiedAt, user.VerificationCompletedAt,
+                IsVerificationExempt(user)
             ));
         }
 
@@ -154,15 +166,18 @@ namespace VerifyHubPortal.Controllers
         {
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
+            var exempt = IsVerificationExempt(user);
             return Ok(new
             {
                 userId = user.Id,
                 email = user.Email,
-                emailVerified = user.EmailVerified,
+                phoneNumber = user.PhoneNumber,
+                emailVerified = exempt || user.EmailVerified,
                 emailVerifiedAt = user.EmailVerifiedAt,
-                mobileVerified = user.MobileVerified,
+                mobileVerified = exempt || user.MobileVerified,
                 mobileVerifiedAt = user.MobileVerifiedAt,
-                verificationCompletedAt = user.VerificationCompletedAt
+                verificationCompletedAt = exempt ? (user.VerificationCompletedAt ?? DateTime.UtcNow) : user.VerificationCompletedAt,
+                exempt
             });
         }
 
@@ -193,6 +208,8 @@ namespace VerifyHubPortal.Controllers
         {
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
+            if (IsVerificationExempt(user))
+                return Ok(new { saved = true, skipped = true, reason = "Owner/admin is exempt from verification." });
             if (!user.EmailVerified)
                 return BadRequest(new { error = "Complete email verification first." });
 
@@ -209,11 +226,18 @@ namespace VerifyHubPortal.Controllers
         {
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
+            if (IsVerificationExempt(user))
+                return Ok(new { verifyToken = (string?)null, phoneNumber = user.PhoneNumber, skipped = true, reason = "Owner/admin is exempt from verification." });
             if (!user.EmailVerified) return BadRequest(new { error = "Complete email verification first." });
 
-            var phone = req.PhoneNumber?.Trim();
+            var phone = string.IsNullOrWhiteSpace(req.PhoneNumber) ? user.PhoneNumber?.Trim() : req.PhoneNumber.Trim();
             if (string.IsNullOrWhiteSpace(phone))
                 return BadRequest(new { error = "Phone number is required before generating QR." });
+            if (!string.Equals(user.PhoneNumber, phone, StringComparison.Ordinal))
+            {
+                user.PhoneNumber = phone;
+                await _db.SaveChangesAsync();
+            }
 
             var token = CreateVerifyBindingToken(user, user.Email, phone);
             return Ok(new { verifyToken = token, phoneNumber = phone });
@@ -224,12 +248,20 @@ namespace VerifyHubPortal.Controllers
         {
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
+            if (IsVerificationExempt(user))
+                return Ok(new { sent = false, skipped = true, reason = "Owner/admin is exempt from verification." });
 
             var email = string.IsNullOrWhiteSpace(req.Email) ? user.Email : req.Email.Trim().ToLowerInvariant();
             if (!string.Equals(email, user.Email, StringComparison.OrdinalIgnoreCase))
                 return BadRequest(new { error = "Email must match logged-in user email." });
 
-            var bindToken = CreateVerifyBindingToken(user, email, req.PhoneNumber?.Trim());
+            var phone = string.IsNullOrWhiteSpace(req.PhoneNumber) ? user.PhoneNumber?.Trim() : req.PhoneNumber.Trim();
+            if (!string.IsNullOrWhiteSpace(phone) && !string.Equals(user.PhoneNumber, phone, StringComparison.Ordinal))
+            {
+                user.PhoneNumber = phone;
+                await _db.SaveChangesAsync();
+            }
+            var bindToken = CreateVerifyBindingToken(user, email, phone);
             await _emailVerify.EnsureLicenseReadyAsync(Request.Host.Host, "1.0.0", Environment.MachineName);
             var baseUrl = $"{Request.Scheme}://{Request.Host}";
             var (ok, error) = await _emailVerify.SendMagicLinkAsync(email, baseUrl, bindToken);
@@ -292,7 +324,7 @@ namespace VerifyHubPortal.Controllers
         {
             var user = await _db.Users.FindAsync(UserId);
             if (user == null) return NotFound();
-            if (!user.EmailVerified || !user.MobileVerified || user.VerificationCompletedAt == null)
+            if (!IsVerificationExempt(user) && (!user.EmailVerified || !user.MobileVerified || user.VerificationCompletedAt == null))
                 return BadRequest(new { error = "Complete platform verification (email + mobile) before purchase." });
 
             var plan = await _db.Plans.Include(p => p.Product).FirstOrDefaultAsync(p => p.Id == req.PlanId);
@@ -345,6 +377,15 @@ namespace VerifyHubPortal.Controllers
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
             var sig = Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
             return $"{payload}.{sig}";
+        }
+
+        private bool IsVerificationExempt(User user)
+        {
+            if (user.Role == UserRole.Admin) return true;
+            var ownerEmail = (Environment.GetEnvironmentVariable("PLATFORM_OWNER_EMAIL")
+                ?? HttpContext.RequestServices.GetRequiredService<IConfiguration>()["PlatformOwner:Email"]
+                ?? "platform@verifyhub.local").Trim().ToLowerInvariant();
+            return string.Equals(user.Email, ownerEmail, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string Base64UrlEncode(byte[] data) =>

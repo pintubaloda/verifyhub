@@ -12,6 +12,7 @@ namespace VerifyHubPortal.Models
         [Required] public string Email    { get; set; } = string.Empty;
         [Required] public string Name     { get; set; } = string.Empty;
         [Required] public string PasswordHash { get; set; } = string.Empty;
+        public string? PhoneNumber { get; set; }
         public UserRole Role       { get; set; } = UserRole.Customer;
         public bool IsActive       { get; set; } = true;
         public DateTime CreatedAt  { get; set; } = DateTime.UtcNow;
@@ -174,7 +175,7 @@ namespace VerifyHubPortal.Models
     // ══════════════════════════════════════════
     // DTOs
     // ══════════════════════════════════════════
-    public record RegisterRequest(string Name, string Email, string Password, string? Company);
+    public record RegisterRequest(string Name, string Email, string Password, string? Company, string? PhoneNumber);
     public record LoginRequest(string Email, string Password);
     public record AuthResponse(string AccessToken, string RefreshToken, UserDto User);
     public record RefreshRequest(string Token);
@@ -188,6 +189,7 @@ namespace VerifyHubPortal.Models
         Guid Id,
         string Name,
         string Email,
+        string? PhoneNumber,
         string? Company,
         UserRole Role,
         DateTime CreatedAt,
@@ -195,7 +197,8 @@ namespace VerifyHubPortal.Models
         DateTime? EmailVerifiedAt,
         bool MobileVerified,
         DateTime? MobileVerifiedAt,
-        DateTime? VerificationCompletedAt
+        DateTime? VerificationCompletedAt,
+        bool IsPlatformOwner
     );
     public record LicenseDto(Guid Id, string Key, string KeyPrefix, string ProductName, string PlanName,
         LicenseStatus Status, DateTime ExpiresAt, int DaysLeft, string? InstalledDomain,

@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { apiFetch } from '../utils/api'
 
+const isAdminRole = (role) => role === 1 || role === 'Admin'
+
 export default function AuthPage({ mode }) {
-  const [form, setForm] = useState({ name:'', email:'', password:'', company:'' })
+  const [form, setForm] = useState({ name:'', email:'', password:'', company:'', phoneNumber:'' })
   const [loading, setLoading] = useState(false)
   const nav = useNavigate()
 
@@ -16,7 +18,7 @@ export default function AuthPage({ mode }) {
       const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register'
       const body = mode === 'login'
         ? { email: form.email, password: form.password }
-        : { name: form.name, email: form.email, password: form.password, company: form.company || null }
+        : { name: form.name, email: form.email, password: form.password, company: form.company || null, phoneNumber: form.phoneNumber || null }
 
       const r = await apiFetch(endpoint, {
         method: 'POST',
@@ -30,7 +32,8 @@ export default function AuthPage({ mode }) {
       localStorage.setItem('vh_refresh', d.refreshToken)
       localStorage.setItem('vh_user', JSON.stringify(d.user))
       toast.success(mode === 'login' ? 'Welcome back!' : 'Account created!')
-      if (!d.user?.emailVerified || !d.user?.mobileVerified || !d.user?.verificationCompletedAt) {
+      const exempt = isAdminRole(d.user?.role) || !!d.user?.isPlatformOwner
+      if (!exempt && (!d.user?.emailVerified || !d.user?.mobileVerified || !d.user?.verificationCompletedAt)) {
         toast('Complete email and mobile verification to continue.')
         nav('/dashboard?tab=verify-user')
       } else {
@@ -90,6 +93,9 @@ export default function AuthPage({ mode }) {
             <Field label="Password" value={form.password} onChange={S('password')} type="password" placeholder="••••••••" />
             {mode === 'register' && (
               <Field label="Company (optional)" value={form.company} onChange={S('company')} placeholder="Acme Corp" />
+            )}
+            {mode === 'register' && (
+              <Field label="Mobile (optional)" value={form.phoneNumber} onChange={S('phoneNumber')} placeholder="+91XXXXXXXXXX" />
             )}
           </div>
 

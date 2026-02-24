@@ -136,6 +136,7 @@ static async Task EnsureUserVerificationColumnsAsync(AppDbContext db)
         await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "MobileVerified" boolean NOT NULL DEFAULT FALSE;""");
         await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "MobileVerifiedAt" timestamp with time zone NULL;""");
         await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "VerificationCompletedAt" timestamp with time zone NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN IF NOT EXISTS "PhoneNumber" text NULL;""");
         return;
     }
 
@@ -144,6 +145,7 @@ static async Task EnsureUserVerificationColumnsAsync(AppDbContext db)
     try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "MobileVerified" INTEGER NOT NULL DEFAULT 0;"""); } catch { }
     try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "MobileVerifiedAt" TEXT NULL;"""); } catch { }
     try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "VerificationCompletedAt" TEXT NULL;"""); } catch { }
+    try { await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Users" ADD COLUMN "PhoneNumber" TEXT NULL;"""); } catch { }
 }
 
 static async Task EnsurePlatformLifetimeLicensesAsync(
