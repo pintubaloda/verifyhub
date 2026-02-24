@@ -383,6 +383,7 @@ function TelemetryTab() {
 function VerifyUserTab() {
   const [status, setStatus] = useState(null)
   const [emailInput, setEmailInput] = useState('')
+  const [phoneInput, setPhoneInput] = useState('')
   const [loading, setLoading] = useState(false)
 
   const loadStatus = async () => {
@@ -443,6 +444,29 @@ function VerifyUserTab() {
     }
   }
 
+  const startMobileFlow = async () => {
+    try {
+      if (!phoneInput.trim()) {
+        toast.error('Enter phone number before generating QR.')
+        return
+      }
+      const r = await API('/api/portal/verification-status/mobile-start', {
+        method: 'POST',
+        body: JSON.stringify({ phoneNumber: phoneInput.trim() }),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        toast.error(d.error || 'Failed to start mobile verification.')
+        return
+      }
+      const url = apiUrl(`/mobileverify?vtoken=${encodeURIComponent(d.verifyToken)}`)
+      window.open(url, '_blank', 'noopener,noreferrer')
+      toast.success('QR session started. Scan and complete verification.')
+    } catch {
+      toast.error('Failed to start mobile verification.')
+    }
+  }
+
   return (
     <div>
       <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Verify User</h2>
@@ -485,9 +509,15 @@ function VerifyUserTab() {
       <div style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:16, padding:20 }}>
         <h3 style={{ fontFamily:'Syne,sans-serif', fontSize:16, marginBottom:12 }}>Step 2: Mobile QR Verification (Plugin UI)</h3>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
-          <a href={apiUrl('/mobileverify')} target="_blank" rel="noreferrer" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #162040', color:'#F0F4FF', textDecoration:'none', fontSize:13 }}>
-            Open Mobile QR Plugin UI
-          </a>
+          <input
+            value={phoneInput}
+            onChange={e => setPhoneInput(e.target.value)}
+            placeholder="user mobile number"
+            style={{ minWidth:240, background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'10px 12px', borderRadius:10, fontSize:13 }}
+          />
+          <button onClick={startMobileFlow} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'linear-gradient(135deg,#4F8FFF,#00C896)', color:'#fff', fontWeight:700, cursor:'pointer' }}>
+            Generate QR
+          </button>
           <button onClick={markMobileDone} style={{ padding:'10px 14px', border:'none', borderRadius:10, background:'#162040', color:'#fff', fontWeight:700, cursor:'pointer' }}>
             Mark Mobile Completed
           </button>

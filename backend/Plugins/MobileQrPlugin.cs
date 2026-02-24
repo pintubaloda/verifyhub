@@ -58,6 +58,8 @@ namespace VerifyHub.MobilePlugin
         public string   QrToken      { get; set; } = string.Empty;
         public string?  PhoneNumber  { get; set; }
         public string?  Email        { get; set; }
+        public Guid?    BoundUserId  { get; set; }
+        public string?  BoundPhone   { get; set; }
         public string   Status       { get; set; } = "pending"; // pending|scanned|verified|expired
         public DateTime ExpiresAt    { get; set; }
         public DateTime? VerifiedAt  { get; set; }
@@ -139,6 +141,21 @@ namespace VerifyHub.MobilePlugin
             return s;
         }
 
+        public bool TryBindSession(string sessionId, string? verifyToken)
+        {
+            if (string.IsNullOrWhiteSpace(verifyToken)) return false;
+            var s = GetBySession(sessionId);
+            if (s == null) return false;
+            if (!TryParseVerifyToken(verifyToken, out var payload)) return false;
+
+            s.BoundUserId = payload.UserId;
+            s.BoundPhone = payload.PhoneNumber;
+            s.Email = payload.Email;
+            _byToken[s.QrToken] = s;
+            _byId[s.SessionId] = s;
+            return true;
+        }
+
         public QrSession? GetByToken(string t)    { _byToken.TryGetValue(t, out var s); return s; }
         public QrSession? GetBySession(string id) { _byId.TryGetValue(id, out var s); return s; }
 
@@ -168,7 +185,9 @@ namespace VerifyHub.MobilePlugin
             var s = GetByToken(token);
             session = null;
             if (s == null || s.IsExpired) return false;
-            s.Status = "verified"; s.PhoneNumber = phone; s.Email = email;
+            var effectivePhone = string.IsNullOrWhiteSpace(phone) ? s.BoundPhone : phone;
+            var effectiveEmail = string.IsNullOrWhiteSpace(email) ? s.Email : email;
+            s.Status = "verified"; s.PhoneNumber = effectivePhone; s.Email = effectiveEmail;
             s.VerifiedAt = DateTime.UtcNow;
             _byToken[token] = s; _byId[s.SessionId] = s;
             session = s;
@@ -236,9 +255,75 @@ namespace VerifyHub.MobilePlugin
             catch (Exception ex) { _log.LogWarning("Verification forward error: {Msg}", ex.Message); }
         }
 
+        public async Task MarkBoundUserVerifiedAsync(QrSession session)
+        {
+            if (!session.BoundUserId.HasValue) return;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetService<AppDbContext>();
+                if (db == null) return;
+                var user = await db.Users.FirstOrDefaultAsync(u => u.Id == session.BoundUserId.Value);
+                if (user == null) return;
+                user.MobileVerified = true;
+                user.MobileVerifiedAt = DateTime.UtcNow;
+                if (user.EmailVerified && user.VerificationCompletedAt == null)
+                    user.VerificationCompletedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to mark bound user verified for session {SessionId}", session.SessionId);
+            }
+        }
+
+        private sealed record VerifyTokenPayload(Guid UserId, string? Email, string? PhoneNumber, long ExpUnix);
+
+        private bool TryParseVerifyToken(string token, out VerifyTokenPayload payload)
+        {
+            payload = default!;
+            try
+            {
+                var parts = token.Split('.', 2);
+                if (parts.Length != 2) return false;
+                var secret = _cfg["Jwt:PluginSecret"] ?? "change-this-plugin-secret-32chars";
+                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+                var actualSig = Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(parts[0])));
+                if (!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(actualSig), Encoding.UTF8.GetBytes(parts[1])))
+                    return false;
+
+                var json = Encoding.UTF8.GetString(Base64UrlDecode(parts[0]));
+                var root = JsonDocument.Parse(json).RootElement;
+                var uid = root.TryGetProperty("uid", out var uidEl) ? uidEl.GetString() : null;
+                var email = root.TryGetProperty("email", out var eEl) ? eEl.GetString() : null;
+                var phone = root.TryGetProperty("phone", out var pEl) ? pEl.GetString() : null;
+                var exp = root.TryGetProperty("exp", out var expEl) ? expEl.GetInt64() : 0;
+                if (!Guid.TryParse(uid, out var userId)) return false;
+                if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() >= exp) return false;
+
+                payload = new VerifyTokenPayload(userId, email, phone, exp);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static string GenerateToken() =>
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
                 .Replace("+", "-").Replace("/", "_").Replace("=", "");
+
+        private static string Base64UrlEncode(byte[] data) =>
+            Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+        private static byte[] Base64UrlDecode(string s)
+        {
+            var padded = s.Replace('-', '+').Replace('_', '/');
+            var mod = padded.Length % 4;
+            if (mod > 0) padded = padded.PadRight(padded.Length + (4 - mod), '=');
+            return Convert.FromBase64String(padded);
+        }
 
         public string GetRenewUrl(HttpContext? ctx = null)
         {
@@ -382,9 +467,23 @@ namespace VerifyHub.MobilePlugin
             {
                 if (!service.State.IsValid) await service.InitAsync(ctx.Request.Host.Host);
                 if (!service.State.IsValid) return Results.StatusCode(402);
+                string? verifyToken = null;
+                if (ctx.Request.ContentLength > 0)
+                {
+                    try
+                    {
+                        var body = await JsonSerializer.DeserializeAsync<JsonElement>(ctx.Request.Body);
+                        verifyToken = body.TryGetProperty("verifyToken", out var vt) ? vt.GetString() : null;
+                    }
+                    catch { }
+                }
                 var ip = ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
                       ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
                 var s = service.CreateSession(ip);
+                if (!string.IsNullOrWhiteSpace(verifyToken))
+                {
+                    service.TryBindSession(s.SessionId, verifyToken);
+                }
                 var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
                 return Results.Ok(new { sessionId = s.SessionId, qrUrl = $"{baseUrl}/mobileverify/scan/{s.QrToken}", qrToken = s.QrToken, expirySeconds = opts.QrExpiryMinutes * 60 });
             });
@@ -449,6 +548,7 @@ namespace VerifyHub.MobilePlugin
                     var hub = ctx.RequestServices.GetRequiredService<IHubContext<MobileQrHub>>();
                     _ = hub.Clients.Group($"s:{session.SessionId}").SendAsync("Verified", new { phone = session.PhoneNumber, email = session.Email, at = session.VerifiedAt ?? DateTime.UtcNow });
                     _ = Task.Run(async () => await service.ForwardVerifyEventAsync(session.SessionId, session.PhoneNumber, session.Email, ctx));
+                    _ = Task.Run(async () => await service.MarkBoundUserVerifiedAsync(session));
                 }
                 return Results.Ok(new { verified = true, phoneNumber = session?.PhoneNumber, email = session?.Email, sessionId = session?.SessionId });
             });
@@ -521,7 +621,8 @@ let sessionData = null; let signalRConn = null; let qrTimer = null; let statusPo
 async function initQr(){
   clearInterval(statusPoll);
   document.getElementById('qr-code').innerHTML=''; document.getElementById('qr-loading').style.display='block'; document.getElementById('qr-ready').style.display='none';
-  const r=await fetch('/mobileverify/create',{method:'POST'});
+  const bindingToken=new URLSearchParams(location.search).get('vtoken');
+  const r=await fetch('/mobileverify/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({verifyToken:bindingToken})});
   if(r.status===402){document.getElementById('expired-overlay').classList.add('show');return;}
   sessionData=await r.json();
   new QRCode(document.getElementById('qr-code'),{text:sessionData.qrUrl,width:200,height:200,colorDark:'#000',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.H});

@@ -1,5 +1,7 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Data;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -198,6 +200,21 @@ namespace VerifyHubPortal.Controllers
             return Ok(new { saved = true, mobileVerified = user.MobileVerified, mobileVerifiedAt = user.MobileVerifiedAt, verificationCompletedAt = user.VerificationCompletedAt });
         }
 
+        [HttpPost("verification-status/mobile-start")]
+        public async Task<IActionResult> StartMobileVerification([FromBody] StartMobileVerificationRequest req)
+        {
+            var user = await _db.Users.FindAsync(UserId);
+            if (user == null) return NotFound();
+            if (!user.EmailVerified) return BadRequest(new { error = "Complete email verification first." });
+
+            var phone = req.PhoneNumber?.Trim();
+            if (string.IsNullOrWhiteSpace(phone))
+                return BadRequest(new { error = "Phone number is required before generating QR." });
+
+            var token = CreateMobileBindingToken(user, phone);
+            return Ok(new { verifyToken = token, phoneNumber = phone });
+        }
+
         [HttpGet("licenses")]
         public async Task<IActionResult> Licenses()
         {
@@ -281,6 +298,28 @@ namespace VerifyHubPortal.Controllers
 
         public record MarkEmailVerifiedRequest(string? Email);
         public record MarkMobileVerifiedRequest(string? SessionId);
+        public record StartMobileVerificationRequest(string? PhoneNumber);
+
+        private string CreateMobileBindingToken(User user, string phoneNumber)
+        {
+            var secret = HttpContext.RequestServices.GetRequiredService<IConfiguration>()["Jwt:PluginSecret"]
+                ?? "change-this-plugin-secret-32chars";
+            var payloadObj = new
+            {
+                uid = user.Id.ToString(),
+                email = user.Email,
+                phone = phoneNumber,
+                exp = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeSeconds()
+            };
+            var payloadJson = JsonSerializer.Serialize(payloadObj);
+            var payload = Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+            var sig = Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+            return $"{payload}.{sig}";
+        }
+
+        private static string Base64UrlEncode(byte[] data) =>
+            Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
     // ══════════════════════════════════════════════════════════
@@ -577,7 +616,26 @@ namespace VerifyHubPortal.Controllers
             var q = _db.TelemetryRecords.Include(t => t.License).AsQueryable();
             if (!string.IsNullOrEmpty(domain)) q = q.Where(t => t.PluginDomain.Contains(domain));
             var total = await q.CountAsync();
-            var items = await q.OrderByDescending(t => t.ReceivedAt).Skip((page-1)*50).Take(50).ToListAsync();
+            var items = await q
+                .OrderByDescending(t => t.ReceivedAt)
+                .Skip((page - 1) * 50)
+                .Take(50)
+                .Select(t => new
+                {
+                    t.Id,
+                    t.SessionId,
+                    t.Channel,
+                    t.PluginDomain,
+                    t.ReceivedAt,
+                    t.IpAddress,
+                    t.CountryCode,
+                    t.City,
+                    t.Isp,
+                    t.RiskScore,
+                    t.UserEmail,
+                    t.UserPhone,
+                })
+                .ToListAsync();
             return Ok(new { total, items });
         }
 
