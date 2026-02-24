@@ -600,6 +600,7 @@ namespace VerifyHubPortal.Controllers
         public async Task<IActionResult> Mine(
             [FromQuery] string? channel,
             [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 200,
             [FromQuery] string? q = null,
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null)
@@ -627,11 +628,13 @@ namespace VerifyHubPortal.Controllers
                     (t.SessionId != null && t.SessionId.Contains(term)));
             }
 
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 20, 1000);
             var total  = await query.CountAsync();
             var items  = await query.OrderByDescending(t => t.ReceivedAt)
-                .Skip((page - 1) * 20).Take(20).ToListAsync();
+                .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
 
-            return Ok(new { total, page, items = items.Select(t => new {
+            return Ok(new { total, page, pageSize, items = items.Select(t => new {
                 t.Id, t.SessionId, t.Channel, t.PluginDomain, t.ReceivedAt,
                 t.IpAddress, t.CountryCode, t.City, t.Isp,
                 t.IsProxy, t.IsVpn, t.IsTor,
@@ -699,15 +702,17 @@ namespace VerifyHubPortal.Controllers
         }
 
         [HttpGet("telemetry")]
-        public async Task<IActionResult> AllTelemetry([FromQuery] int page = 1, [FromQuery] string? domain = null)
+        public async Task<IActionResult> AllTelemetry([FromQuery] int page = 1, [FromQuery] int pageSize = 200, [FromQuery] string? domain = null)
         {
             var q = _db.TelemetryRecords.Include(t => t.License).AsQueryable();
             if (!string.IsNullOrEmpty(domain)) q = q.Where(t => t.PluginDomain.Contains(domain));
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 20, 1000);
             var total = await q.CountAsync();
             var items = await q
                 .OrderByDescending(t => t.ReceivedAt)
-                .Skip((page - 1) * 50)
-                .Take(50)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
                 .Select(t => new
                 {
                     t.Id,
@@ -737,7 +742,7 @@ namespace VerifyHubPortal.Controllers
                     t.RawJson,
                 })
                 .ToListAsync();
-            return Ok(new { total, items });
+            return Ok(new { total, page, pageSize, items });
         }
 
         [HttpGet("plugin-settings")]

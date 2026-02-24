@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { apiFetch, apiUrl } from '../utils/api'
@@ -14,6 +14,76 @@ const API = (path, opts = {}) => {
 const isAdminRole = (role) => role === 1 || role === 'Admin'
 const USD_TO_INR = 83
 const inr = (usd) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format((Number(usd) || 0) * USD_TO_INR)
+const normalizeEmail = (v) => String(v || '').trim().toLowerCase()
+const normalizePhone = (v) => {
+  const raw = String(v || '').trim()
+  if (!raw) return ''
+  const hasPlus = raw.startsWith('+')
+  const digits = raw.replace(/\D/g, '')
+  return digits ? `${hasPlus ? '+' : ''}${digits}` : ''
+}
+const parseJsonSafe = (raw) => {
+  try { return JSON.parse(raw || '{}') || {} } catch { return {} }
+}
+function buildTelemetryIdentityGroups(items) {
+  const groups = []
+  const emailToGroup = new Map()
+  const phoneToGroup = new Map()
+
+  const mergeInto = (keepIdx, dropIdx) => {
+    if (keepIdx === dropIdx) return keepIdx
+    const keep = groups[keepIdx]
+    const drop = groups[dropIdx]
+    if (!keep || !drop) return keepIdx
+    for (const rec of drop.records) keep.records.push(rec)
+    for (const e of drop.emails) { keep.emails.add(e); emailToGroup.set(e, keepIdx) }
+    for (const p of drop.phones) { keep.phones.add(p); phoneToGroup.set(p, keepIdx) }
+    groups[dropIdx] = null
+    return keepIdx
+  }
+
+  for (const t of (items || [])) {
+    const raw = parseJsonSafe(t.rawJson)
+    const email = normalizeEmail(t.userEmail || raw.contactEmail || raw.email)
+    const phone = normalizePhone(t.userPhone || raw.phoneNumber)
+    const candidate = []
+    if (email && emailToGroup.has(email)) candidate.push(emailToGroup.get(email))
+    if (phone && phoneToGroup.has(phone)) candidate.push(phoneToGroup.get(phone))
+    const uniq = [...new Set(candidate)].filter(i => Number.isInteger(i) && groups[i] != null)
+
+    let idx
+    if (!uniq.length) {
+      idx = groups.length
+      groups.push({ id: `grp-${idx}`, records: [], emails: new Set(), phones: new Set() })
+    } else {
+      idx = uniq[0]
+      for (let i = 1; i < uniq.length; i++) idx = mergeInto(idx, uniq[i])
+    }
+
+    const g = groups[idx]
+    g.records.push(t)
+    if (email) { g.emails.add(email); emailToGroup.set(email, idx) }
+    if (phone) { g.phones.add(phone); phoneToGroup.set(phone, idx) }
+  }
+
+  return groups
+    .filter(Boolean)
+    .map(g => {
+      g.records.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime())
+      const latest = g.records[0]
+      const raw = parseJsonSafe(latest?.rawJson)
+      return {
+        id: g.id,
+        records: g.records,
+        count: g.records.length,
+        lastSeen: latest?.receivedAt,
+        email: [...g.emails][0] || '',
+        phone: [...g.phones][0] || '',
+        userLabel: raw.userName || latest?.userEmail || latest?.userPhone || 'Anonymous',
+      }
+    })
+    .sort((a, b) => new Date(b.lastSeen || 0).getTime() - new Date(a.lastSeen || 0).getTime())
+}
 
 function Sidebar({ active, setActive, user, onLogout }) {
   const customerItems = [
@@ -299,20 +369,12 @@ function TelemetryTab() {
   const [expanded, setExpanded] = useState({})
   const [loading, setLoading] = useState(false)
   const parseAll = (raw) => {
-    try {
-      const obj = JSON.parse(raw || '{}')
-      return Object.entries(obj || {})
-    } catch {
-      return []
-    }
+    const obj = parseJsonSafe(raw)
+    return Object.entries(obj || {})
   }
   const getFromRaw = (raw, key) => {
-    try {
-      const obj = JSON.parse(raw || '{}')
-      return obj?.[key]
-    } catch {
-      return null
-    }
+    const obj = parseJsonSafe(raw)
+    return obj?.[key] ?? null
   }
   const formatGps = (lat, lng) => {
     const latN = Number(lat)
@@ -328,6 +390,7 @@ function TelemetryTab() {
       if (query.trim()) qs.set('q', query.trim())
       if (fromDate) qs.set('from', `${fromDate}T00:00:00Z`)
       if (toDate) qs.set('to', `${toDate}T23:59:59Z`)
+      qs.set('pageSize', '500')
       const r = await API(`/api/telemetry/mine?${qs.toString()}`)
       const d = await r.json()
       setData(d)
@@ -335,6 +398,7 @@ function TelemetryTab() {
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [channel, fromDate, toDate])
+  const groups = useMemo(() => buildTelemetryIdentityGroups(data?.items || []), [data?.items])
 
   return (
     <div>
@@ -361,7 +425,7 @@ function TelemetryTab() {
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'#5A6A8A' }}>Loading telemetry…</div>
-      ) : !data?.items?.length ? (
+      ) : !groups.length ? (
         <div style={{
           background:'#0a0f1e', border:'1px dashed #162040', borderRadius:16,
           padding:60, textAlign:'center', color:'#5A6A8A',
@@ -373,61 +437,86 @@ function TelemetryTab() {
       ) : (
         <div>
           <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:16 }}>
-            Showing {data.items.length} of {data.total} records
+            Showing {data?.items?.length || 0} records grouped into {groups.length} identity profiles (email/phone merge).
           </div>
-          {data.items.map(t => (
-            <div key={t.id} style={{
+          {groups.map(g => (
+            <div key={g.id} style={{
               background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:20, marginBottom:12,
             }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:8 }}>
                 <div style={{ display:'flex', gap:10, alignItems:'center' }}>
-                  <span style={{ fontSize:18 }}>{t.channel === 'email' ? '✉' : '📱'}</span>
+                  <span style={{ fontSize:18 }}>🧾</span>
                   <span style={{ fontFamily:'Syne,sans-serif', fontWeight:700, fontSize:15 }}>
-                    {getFromRaw(t.rawJson, 'userName') || t.userEmail || t.userPhone || 'Anonymous'}
+                    {g.userLabel}
                   </span>
                   <span style={{ background:'#162040', padding:'2px 10px', borderRadius:8, fontSize:11, color:'#5A6A8A' }}>
-                    {t.channel}
+                    {g.count} events
                   </span>
                 </div>
                 <div style={{ fontSize:12, color:'#5A6A8A', fontFamily:'JetBrains Mono,monospace' }}>
-                  {new Date(t.receivedAt).toLocaleString()}
+                  Last seen: {new Date(g.lastSeen).toLocaleString()}
                 </div>
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:8 }}>
-                {[
-                  ['IP', t.ipAddress], ['Country', t.countryCode], ['City', t.city], ['ISP', t.isp],
-                  ['Device ID', getFromRaw(t.rawJson, 'deviceId') || '—'],
-                  ['Email', t.userEmail || getFromRaw(t.rawJson, 'contactEmail') || '—'],
-                  ['Mobile', t.userPhone || getFromRaw(t.rawJson, 'phoneNumber') || '—'],
-                  ['Browser', t.browserName], ['OS', t.osName],
-                  ['Device', t.isMobile?'📱 Mobile':'🖥 Desktop'],
-                  ['GPS', formatGps(t.gpsLatitude, t.gpsLongitude)],
-                  ['Battery', t.batteryLevel != null ? `${(t.batteryLevel*100).toFixed(0)}%` : '—'],
-                  ['Risk', `${t.riskScore}/100`],
-                  ['Proxy', t.isProxy ? '⚠ Yes' : 'No'], ['VPN', t.isVpn ? '⚠ Yes' : 'No'],
-                ].map(([k,v]) => (
-                  <div key={k} style={{ background:'#050810', borderRadius:8, padding:'8px 10px' }}>
-                    <div style={{ fontSize:10, color:'#5A6A8A', fontWeight:600, textTransform:'uppercase', marginBottom:3 }}>{k}</div>
-                    <div style={{ fontSize:12, fontFamily:'JetBrains Mono,monospace', color: (k==='Proxy'||k==='VPN')&&v!=='No' ? '#FF4D6A' : '#4F8FFF', fontWeight:600 }}>{v||'—'}</div>
-                  </div>
-                ))}
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
+                <div style={{ background:'#050810', borderRadius:8, padding:'8px 10px' }}>
+                  <div style={{ fontSize:10, color:'#5A6A8A', fontWeight:600, textTransform:'uppercase', marginBottom:3 }}>Email</div>
+                  <div style={{ fontSize:12, fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontWeight:600 }}>{g.email || '—'}</div>
+                </div>
+                <div style={{ background:'#050810', borderRadius:8, padding:'8px 10px' }}>
+                  <div style={{ fontSize:10, color:'#5A6A8A', fontWeight:600, textTransform:'uppercase', marginBottom:3 }}>Mobile</div>
+                  <div style={{ fontSize:12, fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontWeight:600 }}>{g.phone || '—'}</div>
+                </div>
+                <div style={{ background:'#050810', borderRadius:8, padding:'8px 10px' }}>
+                  <div style={{ fontSize:10, color:'#5A6A8A', fontWeight:600, textTransform:'uppercase', marginBottom:3 }}>Total Telemetry Events</div>
+                  <div style={{ fontSize:12, fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontWeight:600 }}>{g.count}</div>
+                </div>
               </div>
               <div style={{ marginTop:10 }}>
-                <button onClick={() => setExpanded(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
-                  {expanded[t.id] ? 'Hide Full Telemetry' : 'Show Full Telemetry'}
+                <button onClick={() => setExpanded(prev => ({ ...prev, [g.id]: !prev[g.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
+                  {expanded[g.id] ? 'Hide Timeline' : 'View Timeline'}
                 </button>
-                {expanded[t.id] && (
-                  <div style={{ marginTop:8, background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
-                    <div style={{ fontSize:11, color:'#5A6A8A', marginBottom:8 }}>All fields received from verification payload</div>
-                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
-                      {parseAll(t.rawJson).map(([k, v]) => (
-                        <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:8, padding:'8px 10px' }}>
-                          <div style={{ fontSize:10, color:'#5A6A8A', textTransform:'uppercase', marginBottom:4 }}>{k}</div>
-                          <div style={{ fontSize:12, color:'#F0F4FF', fontFamily:'JetBrains Mono,monospace', wordBreak:'break-word' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                {expanded[g.id] && (
+                  <div style={{ marginTop:8, display:'grid', gap:8 }}>
+                    {g.records.map(t => (
+                      <div key={t.id} style={{ marginTop:8, background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', gap:8, flexWrap:'wrap', marginBottom:8 }}>
+                          <div style={{ fontSize:11, color:'#5A6A8A' }}>{t.channel} · {t.pluginDomain || '-'} · {new Date(t.receivedAt).toLocaleString()}</div>
+                          <div style={{ fontSize:11, color:'#5A6A8A', fontFamily:'JetBrains Mono,monospace' }}>{t.sessionId || '-'}</div>
                         </div>
-                      ))}
-                    </div>
-                    <pre style={{ marginTop:10, whiteSpace:'pre-wrap', wordBreak:'break-word', fontSize:10, color:'#5A6A8A' }}>{t.rawJson || '{}'}</pre>
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:8 }}>
+                          {[
+                            ['IP', t.ipAddress], ['Country', t.countryCode], ['City', t.city], ['ISP', t.isp],
+                            ['Device ID', getFromRaw(t.rawJson, 'deviceId') || '—'],
+                            ['Browser', t.browserName], ['OS', t.osName],
+                            ['GPS', formatGps(t.gpsLatitude, t.gpsLongitude)],
+                            ['Battery', t.batteryLevel != null ? `${(Number(t.batteryLevel)*100).toFixed(0)}%` : '—'],
+                            ['Risk', `${t.riskScore}/100`],
+                            ['Proxy', t.isProxy ? '⚠ Yes' : 'No'], ['VPN', t.isVpn ? '⚠ Yes' : 'No'],
+                          ].map(([k,v]) => (
+                            <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', borderRadius:8, padding:'8px 10px' }}>
+                              <div style={{ fontSize:10, color:'#5A6A8A', fontWeight:600, textTransform:'uppercase', marginBottom:3 }}>{k}</div>
+                              <div style={{ fontSize:12, fontFamily:'JetBrains Mono,monospace', color: (k==='Proxy'||k==='VPN')&&v!=='No' ? '#FF4D6A' : '#4F8FFF', fontWeight:600 }}>{v||'—'}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => setExpanded(prev => ({ ...prev, [`raw-${t.id}`]: !prev[`raw-${t.id}`] }))} style={{ marginTop:10, padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#0a0f1e', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
+                          {expanded[`raw-${t.id}`] ? 'Hide Full Payload' : 'Show Full Payload'}
+                        </button>
+                        {expanded[`raw-${t.id}`] && (
+                          <div style={{ marginTop:8 }}>
+                            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
+                              {parseAll(t.rawJson).map(([k, v]) => (
+                                <div key={`${t.id}-raw-${k}`} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:8, padding:'8px 10px' }}>
+                                  <div style={{ fontSize:10, color:'#5A6A8A', textTransform:'uppercase', marginBottom:4 }}>{k}</div>
+                                  <div style={{ fontSize:12, color:'#F0F4FF', fontFamily:'JetBrains Mono,monospace', wordBreak:'break-word' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <pre style={{ marginTop:10, whiteSpace:'pre-wrap', wordBreak:'break-word', fontSize:10, color:'#5A6A8A' }}>{t.rawJson || '{}'}</pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -766,34 +855,28 @@ function AdminTelemetryTab() {
   const [expanded, setExpanded] = useState({})
   const [loading, setLoading] = useState(false)
   const parseAll = (raw) => {
-    try {
-      const obj = JSON.parse(raw || '{}')
-      return Object.entries(obj || {})
-    } catch {
-      return []
-    }
+    const obj = parseJsonSafe(raw)
+    return Object.entries(obj || {})
   }
   const getFromRaw = (raw, key) => {
-    try {
-      const obj = JSON.parse(raw || '{}')
-      return obj?.[key]
-    } catch {
-      return null
-    }
+    const obj = parseJsonSafe(raw)
+    return obj?.[key] ?? null
   }
 
   const load = async () => {
     setLoading(true)
     try {
-      const q = domain.trim() ? `?domain=${encodeURIComponent(domain.trim())}` : ''
-      const r = await API(`/api/admin/telemetry${q}`)
+      const qs = new URLSearchParams()
+      if (domain.trim()) qs.set('domain', domain.trim())
+      qs.set('pageSize', '500')
+      const r = await API(`/api/admin/telemetry?${qs.toString()}`)
       if (r.ok) setData(await r.json())
     } catch {}
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
 
-  const items = data?.items ?? []
+  const groups = useMemo(() => buildTelemetryIdentityGroups(data?.items || []), [data?.items])
   return (
     <div>
       <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Platform Telemetry</h2>
@@ -802,35 +885,47 @@ function AdminTelemetryTab() {
         <button onClick={load} style={{ padding:'8px 12px', borderRadius:8, border:'1px solid #162040', background:'#0a0f1e', color:'#F0F4FF', fontSize:12, cursor:'pointer' }}>Apply</button>
       </div>
       <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:16 }}>
-        Total: {data?.total ?? 0}
+        Total events: {data?.total ?? 0} · Grouped identities: {groups.length}
       </div>
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'#5A6A8A' }}>Loading telemetry…</div>
-      ) : !items.length ? (
+      ) : !groups.length ? (
         <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>No telemetry records.</div>
-      ) : items.map(t => (
-        <div key={t.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
+      ) : groups.map(g => (
+        <div key={g.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
           <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
-            <div style={{ fontSize:13, color:'#F0F4FF' }}>{t.channel} · {t.pluginDomain || '-'} · {(getFromRaw(t.rawJson, 'userName') || t.userEmail || t.userPhone || 'Anonymous')}</div>
-            <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(t.receivedAt).toLocaleString()}</div>
-          </div>
-          <div style={{ fontSize:12, color:'#5A6A8A', marginTop:6 }}>
-            {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · {getFromRaw(t.rawJson, 'deviceId') || '-'} · risk {t.riskScore ?? 0}
+            <div style={{ fontSize:13, color:'#F0F4FF' }}>{g.userLabel} · {g.email || '-'} · {g.phone || '-'} · {g.count} events</div>
+            <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(g.lastSeen).toLocaleString()}</div>
           </div>
           <div style={{ marginTop:10 }}>
-            <button onClick={() => setExpanded(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
-              {expanded[t.id] ? 'Hide Full Telemetry' : 'Show Full Telemetry'}
+            <button onClick={() => setExpanded(prev => ({ ...prev, [g.id]: !prev[g.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
+              {expanded[g.id] ? 'Hide Timeline' : 'Show Timeline'}
             </button>
-            {expanded[t.id] && (
-              <div style={{ marginTop:8, background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
-                  {parseAll(t.rawJson).map(([k, v]) => (
-                    <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:8, padding:'8px 10px' }}>
-                      <div style={{ fontSize:10, color:'#5A6A8A', textTransform:'uppercase', marginBottom:4 }}>{k}</div>
-                      <div style={{ fontSize:12, color:'#F0F4FF', fontFamily:'JetBrains Mono,monospace', wordBreak:'break-word' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+            {expanded[g.id] && (
+              <div style={{ marginTop:8, display:'grid', gap:8 }}>
+                {g.records.map(t => (
+                  <div key={t.id} style={{ background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
+                    <div style={{ fontSize:12, color:'#5A6A8A', marginBottom:6 }}>
+                      {t.channel} · {t.pluginDomain || '-'} · {new Date(t.receivedAt).toLocaleString()}
                     </div>
-                  ))}
-                </div>
+                    <div style={{ fontSize:12, color:'#5A6A8A', marginBottom:8 }}>
+                      {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · {getFromRaw(t.rawJson, 'deviceId') || '-'} · risk {t.riskScore ?? 0}
+                    </div>
+                    <button onClick={() => setExpanded(prev => ({ ...prev, [`raw-${t.id}`]: !prev[`raw-${t.id}`] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#0a0f1e', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
+                      {expanded[`raw-${t.id}`] ? 'Hide Full Payload' : 'Show Full Payload'}
+                    </button>
+                    {expanded[`raw-${t.id}`] && (
+                      <div style={{ marginTop:8, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
+                        {parseAll(t.rawJson).map(([k, v]) => (
+                          <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:8, padding:'8px 10px' }}>
+                            <div style={{ fontSize:10, color:'#5A6A8A', textTransform:'uppercase', marginBottom:4 }}>{k}</div>
+                            <div style={{ fontSize:12, color:'#F0F4FF', fontFamily:'JetBrains Mono,monospace', wordBreak:'break-word' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>
