@@ -656,9 +656,22 @@ namespace VerifyHubPortal.Controllers
                     t.CountryCode,
                     t.City,
                     t.Isp,
+                    t.IsProxy,
+                    t.IsVpn,
+                    t.IsTor,
+                    t.GpsLatitude,
+                    t.GpsLongitude,
+                    t.BrowserName,
+                    t.OsName,
+                    t.DeviceType,
+                    t.IsMobile,
+                    t.BatteryLevel,
+                    t.NetworkType,
+                    t.CanvasHash,
                     t.RiskScore,
                     t.UserEmail,
                     t.UserPhone,
+                    t.RawJson,
                 })
                 .ToListAsync();
             return Ok(new { total, items });

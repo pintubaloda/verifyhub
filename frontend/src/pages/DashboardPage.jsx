@@ -298,6 +298,14 @@ function TelemetryTab() {
   const [toDate, setToDate] = useState('')
   const [expanded, setExpanded] = useState({})
   const [loading, setLoading] = useState(false)
+  const parseAll = (raw) => {
+    try {
+      const obj = JSON.parse(raw || '{}')
+      return Object.entries(obj || {})
+    } catch {
+      return []
+    }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -390,12 +398,21 @@ function TelemetryTab() {
               </div>
               <div style={{ marginTop:10 }}>
                 <button onClick={() => setExpanded(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
-                  {expanded[t.id] ? 'Hide Raw JSON' : 'Show Raw JSON'}
+                  {expanded[t.id] ? 'Hide Full Telemetry' : 'Show Full Telemetry'}
                 </button>
                 {expanded[t.id] && (
-                  <pre style={{ marginTop:8, whiteSpace:'pre-wrap', wordBreak:'break-word', fontSize:11, color:'#5A6A8A', background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
-                    {t.rawJson || '{}'}
-                  </pre>
+                  <div style={{ marginTop:8, background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
+                    <div style={{ fontSize:11, color:'#5A6A8A', marginBottom:8 }}>All fields received from verification payload</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
+                      {parseAll(t.rawJson).map(([k, v]) => (
+                        <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:8, padding:'8px 10px' }}>
+                          <div style={{ fontSize:10, color:'#5A6A8A', textTransform:'uppercase', marginBottom:4 }}>{k}</div>
+                          <div style={{ fontSize:12, color:'#F0F4FF', fontFamily:'JetBrains Mono,monospace', wordBreak:'break-word' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <pre style={{ marginTop:10, whiteSpace:'pre-wrap', wordBreak:'break-word', fontSize:10, color:'#5A6A8A' }}>{t.rawJson || '{}'}</pre>
+                  </div>
                 )}
               </div>
             </div>
@@ -706,7 +723,16 @@ function AdminLicensesTab({ licenses }) {
 function AdminTelemetryTab() {
   const [data, setData] = useState(null)
   const [domain, setDomain] = useState('')
+  const [expanded, setExpanded] = useState({})
   const [loading, setLoading] = useState(false)
+  const parseAll = (raw) => {
+    try {
+      const obj = JSON.parse(raw || '{}')
+      return Object.entries(obj || {})
+    } catch {
+      return []
+    }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -742,6 +768,23 @@ function AdminTelemetryTab() {
           </div>
           <div style={{ fontSize:12, color:'#5A6A8A', marginTop:6 }}>
             {t.ipAddress || '-'} · {t.countryCode || '-'} · {t.city || '-'} · risk {t.riskScore ?? 0}
+          </div>
+          <div style={{ marginTop:10 }}>
+            <button onClick={() => setExpanded(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
+              {expanded[t.id] ? 'Hide Full Telemetry' : 'Show Full Telemetry'}
+            </button>
+            {expanded[t.id] && (
+              <div style={{ marginTop:8, background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:8 }}>
+                  {parseAll(t.rawJson).map(([k, v]) => (
+                    <div key={`${t.id}-${k}`} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:8, padding:'8px 10px' }}>
+                      <div style={{ fontSize:10, color:'#5A6A8A', textTransform:'uppercase', marginBottom:4 }}>{k}</div>
+                      <div style={{ fontSize:12, color:'#F0F4FF', fontFamily:'JetBrains Mono,monospace', wordBreak:'break-word' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ))}

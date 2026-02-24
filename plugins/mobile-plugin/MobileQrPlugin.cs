@@ -630,8 +630,12 @@ async function initQr(){
   document.getElementById('qr-ready').style.display='block';
   setStatus('','Waiting for scan…');
   startTimer(sessionData.expirySeconds);
-  await connectSignalR(sessionData.sessionId);
   startStatusPoll();
+  try{
+    await connectSignalR(sessionData.sessionId);
+  }catch{
+    setStatus('scanning','📡 Live channel unavailable, using status polling…');
+  }
 }
 async function connectSignalR(sid){
   if(signalRConn){try{await signalRConn.stop();}catch{}}
@@ -650,6 +654,7 @@ async function startStatusPoll(){
       const r=await fetch(`/mobileverify/status/${sessionData.sessionId}`);
       if(!r.ok) return;
       const d=await r.json();
+      if(d.status==='scanned'){ setStatus('scanning','📱 Mobile connected!'); }
       if(d.status==='verified'){ setVerifiedUi(d.phone||'—'); }
     }catch{}
   },2000);
