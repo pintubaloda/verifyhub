@@ -314,15 +314,6 @@ function TelemetryTab() {
       return null
     }
   }
-  const getFromRaw = (raw, key) => {
-    try {
-      const obj = JSON.parse(raw || '{}')
-      return obj?.[key]
-    } catch {
-      return null
-    }
-  }
-
   const load = async () => {
     setLoading(true)
     try {
