@@ -314,6 +314,12 @@ function TelemetryTab() {
       return null
     }
   }
+  const formatGps = (lat, lng) => {
+    const latN = Number(lat)
+    const lngN = Number(lng)
+    if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return '—'
+    return `${latN.toFixed(4)}, ${lngN.toFixed(4)}`
+  }
   const load = async () => {
     setLoading(true)
     try {
@@ -395,7 +401,7 @@ function TelemetryTab() {
                   ['Mobile', t.userPhone || getFromRaw(t.rawJson, 'phoneNumber') || '—'],
                   ['Browser', t.browserName], ['OS', t.osName],
                   ['Device', t.isMobile?'📱 Mobile':'🖥 Desktop'],
-                  ['GPS', t.gpsLatitude ? `${t.gpsLatitude?.toFixed(4)}, ${t.gpsLongitude?.toFixed(4)}` : '—'],
+                  ['GPS', formatGps(t.gpsLatitude, t.gpsLongitude)],
                   ['Battery', t.batteryLevel != null ? `${(t.batteryLevel*100).toFixed(0)}%` : '—'],
                   ['Risk', `${t.riskScore}/100`],
                   ['Proxy', t.isProxy ? '⚠ Yes' : 'No'], ['VPN', t.isVpn ? '⚠ Yes' : 'No'],
@@ -765,6 +771,14 @@ function AdminTelemetryTab() {
       return Object.entries(obj || {})
     } catch {
       return []
+    }
+  }
+  const getFromRaw = (raw, key) => {
+    try {
+      const obj = JSON.parse(raw || '{}')
+      return obj?.[key]
+    } catch {
+      return null
     }
   }
 
