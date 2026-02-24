@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 
+const USD_TO_INR = 83
+const toInr = (usd) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format((Number(usd) || 0) * USD_TO_INR)
+
 // ── Animated background particles ────────────────────────────────────────
 function ParticleField() {
   const canvasRef = useRef(null)
@@ -161,7 +164,7 @@ function PricingCard({ name, price, features, popular, color, prefix }) {
           fontFamily: 'Syne, sans-serif', fontSize: 42, fontWeight: 800,
           background: `linear-gradient(135deg, ${color}, #B06AFF)`,
           WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text'
-        }}>${price}</span>
+        }}>{toInr(price)}</span>
         <span style={{ color: '#5A6A8A', fontSize: 14, marginLeft: 6 }}>/year</span>
       </div>
       <ul style={{ listStyle: 'none', marginBottom: 28 }}>

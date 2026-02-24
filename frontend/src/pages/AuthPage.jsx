@@ -30,7 +30,12 @@ export default function AuthPage({ mode }) {
       localStorage.setItem('vh_refresh', d.refreshToken)
       localStorage.setItem('vh_user', JSON.stringify(d.user))
       toast.success(mode === 'login' ? 'Welcome back!' : 'Account created!')
-      nav('/dashboard')
+      if (!d.user?.emailVerified || !d.user?.mobileVerified || !d.user?.verificationCompletedAt) {
+        toast('Complete email and mobile verification to continue.')
+        nav('/dashboard?tab=verify-user')
+      } else {
+        nav('/dashboard')
+      }
     } catch { toast.error('Network error.') }
     finally { setLoading(false) }
   }

@@ -270,6 +270,11 @@ namespace VerifyHubPortal.Controllers
         [HttpPost("orders")]
         public async Task<IActionResult> CreateOrder([FromBody] CreateOrderRequest req)
         {
+            var user = await _db.Users.FindAsync(UserId);
+            if (user == null) return NotFound();
+            if (!user.EmailVerified || !user.MobileVerified || user.VerificationCompletedAt == null)
+                return BadRequest(new { error = "Complete platform verification (email + mobile) before purchase." });
+
             var plan = await _db.Plans.Include(p => p.Product).FirstOrDefaultAsync(p => p.Id == req.PlanId);
             if (plan == null) return NotFound();
             var order = new Order
@@ -529,7 +534,12 @@ namespace VerifyHubPortal.Controllers
 
         // User can view their own telemetry in the dashboard
         [HttpGet("mine"), Authorize]
-        public async Task<IActionResult> Mine([FromQuery] string? channel, [FromQuery] int page = 1)
+        public async Task<IActionResult> Mine(
+            [FromQuery] string? channel,
+            [FromQuery] int page = 1,
+            [FromQuery] string? q = null,
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null)
         {
             var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
             var isAdmin = User.IsInRole("Admin") || User.FindFirstValue(ClaimTypes.Role) == "Admin";
@@ -541,6 +551,18 @@ namespace VerifyHubPortal.Controllers
             }
 
             if (!string.IsNullOrEmpty(channel)) query = query.Where(t => t.Channel == channel);
+            if (from.HasValue) query = query.Where(t => t.ReceivedAt >= from.Value.ToUniversalTime());
+            if (to.HasValue) query = query.Where(t => t.ReceivedAt <= to.Value.ToUniversalTime());
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                var term = q.Trim();
+                query = query.Where(t =>
+                    (t.UserEmail != null && t.UserEmail.Contains(term)) ||
+                    (t.UserPhone != null && t.UserPhone.Contains(term)) ||
+                    (t.IpAddress != null && t.IpAddress.Contains(term)) ||
+                    (t.PluginDomain != null && t.PluginDomain.Contains(term)) ||
+                    (t.SessionId != null && t.SessionId.Contains(term)));
+            }
 
             var total  = await query.CountAsync();
             var items  = await query.OrderByDescending(t => t.ReceivedAt)
@@ -554,6 +576,7 @@ namespace VerifyHubPortal.Controllers
                 t.BrowserName, t.OsName, t.DeviceType, t.IsMobile,
                 t.BatteryLevel, t.NetworkType, t.RiskScore,
                 t.UserEmail, t.UserPhone,
+                t.RawJson,
             })});
         }
     }

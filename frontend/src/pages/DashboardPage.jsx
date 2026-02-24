@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { apiFetch, apiUrl } from '../utils/api'
 
@@ -12,6 +12,8 @@ const API = (path, opts = {}) => {
 }
 
 const isAdminRole = (role) => role === 1 || role === 'Admin'
+const USD_TO_INR = 83
+const inr = (usd) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format((Number(usd) || 0) * USD_TO_INR)
 
 function Sidebar({ active, setActive, user, onLogout }) {
   const customerItems = [
@@ -273,7 +275,7 @@ function LicensesTab({ licenses, onRefresh }) {
                   fontFamily:'Syne,sans-serif', fontSize:30, fontWeight:800, marginBottom:14,
                   background:`linear-gradient(135deg,${p.color},#B06AFF)`,
                   WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text',
-                }}>${p.price}/yr</div>
+                }}>{inr(p.price)}/yr</div>
                 <button onClick={() => buyPlan(p.id)} disabled={buying === p.id} style={{
                   width:'100%', padding:'10px', borderRadius:10, border:'none', cursor:buying===p.id?'not-allowed':'pointer',
                   background:buying===p.id?'#162040':`linear-gradient(135deg,${p.color},#B06AFF)`,
@@ -291,19 +293,27 @@ function LicensesTab({ licenses, onRefresh }) {
 function TelemetryTab() {
   const [data, setData] = useState(null)
   const [channel, setChannel] = useState('')
+  const [query, setQuery] = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [expanded, setExpanded] = useState({})
   const [loading, setLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      const q = channel ? `?channel=${channel}` : ''
-      const r = await API(`/api/telemetry/mine${q}`)
+      const qs = new URLSearchParams()
+      if (channel) qs.set('channel', channel)
+      if (query.trim()) qs.set('q', query.trim())
+      if (fromDate) qs.set('from', `${fromDate}T00:00:00Z`)
+      if (toDate) qs.set('to', `${toDate}T23:59:59Z`)
+      const r = await API(`/api/telemetry/mine?${qs.toString()}`)
       const d = await r.json()
       setData(d)
     } catch {}
     finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [channel])
+  useEffect(() => { load() }, [channel, fromDate, toDate])
 
   return (
     <div>
@@ -320,6 +330,12 @@ function TelemetryTab() {
             }}>{c || 'All'}</button>
           ))}
         </div>
+      </div>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:16 }}>
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by email, phone, IP, session" style={{ minWidth:280, background:'#0a0f1e', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:10, fontSize:12 }} />
+        <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={{ background:'#0a0f1e', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:10, fontSize:12 }} />
+        <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={{ background:'#0a0f1e', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:10, fontSize:12 }} />
+        <button onClick={load} style={{ padding:'8px 12px', borderRadius:10, border:'1px solid #162040', background:'#0a0f1e', color:'#F0F4FF', fontSize:12, cursor:'pointer' }}>Apply</button>
       </div>
 
       {loading ? (
@@ -372,10 +388,92 @@ function TelemetryTab() {
                   </div>
                 ))}
               </div>
+              <div style={{ marginTop:10 }}>
+                <button onClick={() => setExpanded(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #162040', background:'#050810', color:'#5A6A8A', fontSize:12, cursor:'pointer' }}>
+                  {expanded[t.id] ? 'Hide Raw JSON' : 'Show Raw JSON'}
+                </button>
+                {expanded[t.id] && (
+                  <pre style={{ marginTop:8, whiteSpace:'pre-wrap', wordBreak:'break-word', fontSize:11, color:'#5A6A8A', background:'#050810', border:'1px solid #162040', borderRadius:8, padding:10 }}>
+                    {t.rawJson || '{}'}
+                  </pre>
+                )}
+              </div>
             </div>
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function OrdersTab() {
+  const [orders, setOrders] = useState([])
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const r = await API('/api/portal/orders')
+        if (r.ok) setOrders(await r.json())
+      } catch {}
+      finally { setLoading(false) }
+    }
+    load()
+  }, [])
+
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Purchase Management</h2>
+      {loading ? (
+        <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Loading orders…</div>
+      ) : !orders.length ? (
+        <div style={{ color:'#5A6A8A', padding:40, textAlign:'center', border:'1px dashed #162040', borderRadius:12 }}>No orders yet.</div>
+      ) : (
+        orders.map(o => (
+          <div key={o.id} style={{ background:'#0a0f1e', border:'1px solid #162040', borderRadius:14, padding:18, marginBottom:10 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+              <div style={{ fontFamily:'JetBrains Mono,monospace', color:'#4F8FFF', fontSize:13 }}>{o.id}</div>
+              <div style={{ fontSize:12, color:'#5A6A8A' }}>{new Date(o.createdAt).toLocaleString()}</div>
+            </div>
+            <div style={{ fontSize:13, color:'#5A6A8A', marginTop:6 }}>
+              {(o.product || '-')} · {(o.plan || '-')} · {(o.status || '-')}
+            </div>
+            <div style={{ marginTop:8, color:'#F0F4FF', fontWeight:700 }}>{inr(o.amountUsd || 0)}</div>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+function BillingTab() {
+  const [orders, setOrders] = useState([])
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await API('/api/portal/orders')
+        if (r.ok) setOrders(await r.json())
+      } catch {}
+    }
+    load()
+  }, [])
+  const completed = orders.filter(o => String(o.status) === 'Completed')
+  const totalInr = completed.reduce((sum, o) => sum + ((Number(o.amountUsd) || 0) * USD_TO_INR), 0)
+  const thisMonthInr = completed
+    .filter(o => new Date(o.createdAt) >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+    .reduce((sum, o) => sum + ((Number(o.amountUsd) || 0) * USD_TO_INR), 0)
+
+  return (
+    <div>
+      <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Billing</h2>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12, marginBottom:18 }}>
+        <StatCard icon="💰" label="Total Paid (INR)" value={new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(totalInr)} color="#00C896" />
+        <StatCard icon="📅" label="Last 30 Days (INR)" value={new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(thisMonthInr)} color="#4F8FFF" />
+        <StatCard icon="🧾" label="Invoices" value={completed.length} color="#B06AFF" />
+      </div>
+      <div style={{ color:'#5A6A8A', fontSize:13, background:'#0a0f1e', border:'1px solid #162040', borderRadius:12, padding:14 }}>
+        All prices and billing displays are now shown in INR (converted from base plan USD values).
+      </div>
     </div>
   )
 }
@@ -394,6 +492,18 @@ function VerifyUserTab() {
         const d = await r.json()
         setStatus(d)
         setEmailInput(d.email || '')
+        const cached = localStorage.getItem('vh_user')
+        if (cached) {
+          const parsed = JSON.parse(cached)
+          localStorage.setItem('vh_user', JSON.stringify({
+            ...parsed,
+            emailVerified: !!d.emailVerified,
+            emailVerifiedAt: d.emailVerifiedAt || null,
+            mobileVerified: !!d.mobileVerified,
+            mobileVerifiedAt: d.mobileVerifiedAt || null,
+            verificationCompletedAt: d.verificationCompletedAt || null,
+          }))
+        }
       }
     } catch {}
     finally { setLoading(false) }
@@ -536,7 +646,7 @@ function AdminOverviewTab({ stats }) {
         <StatCard icon="🔑" label="Total Licenses" value={stats?.totalLicenses ?? '—'} color="#00C896" />
         <StatCard icon="✅" label="Active Licenses" value={stats?.activeLicenses ?? '—'} color="#B06AFF" />
         <StatCard icon="📡" label="Telemetry Records" value={stats?.totalTelemetryRecords ?? '—'} color="#FFB300" />
-        <StatCard icon="💰" label="Total Revenue (USD)" value={stats?.totalRevenue ?? '—'} color="#00C896" />
+        <StatCard icon="💰" label="Total Revenue (INR)" value={stats?.totalRevenue == null ? '—' : inr(stats.totalRevenue)} color="#00C896" />
         <StatCard icon="🛒" label="Orders (30d)" value={stats?.ordersThisMonth ?? '—'} color="#4F8FFF" />
       </div>
     </div>
@@ -595,12 +705,14 @@ function AdminLicensesTab({ licenses }) {
 
 function AdminTelemetryTab() {
   const [data, setData] = useState(null)
+  const [domain, setDomain] = useState('')
   const [loading, setLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      const r = await API('/api/admin/telemetry')
+      const q = domain.trim() ? `?domain=${encodeURIComponent(domain.trim())}` : ''
+      const r = await API(`/api/admin/telemetry${q}`)
       if (r.ok) setData(await r.json())
     } catch {}
     finally { setLoading(false) }
@@ -611,6 +723,10 @@ function AdminTelemetryTab() {
   return (
     <div>
       <h2 style={{ fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800, marginBottom:24 }}>Platform Telemetry</h2>
+      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+        <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="Filter by domain" style={{ background:'#050810', border:'1px solid #162040', color:'#F0F4FF', padding:'8px 10px', borderRadius:8, fontSize:12, minWidth:220 }} />
+        <button onClick={load} style={{ padding:'8px 12px', borderRadius:8, border:'1px solid #162040', background:'#0a0f1e', color:'#F0F4FF', fontSize:12, cursor:'pointer' }}>Apply</button>
+      </div>
       <div style={{ color:'#5A6A8A', fontSize:13, marginBottom:16 }}>
         Total: {data?.total ?? 0}
       </div>
@@ -1105,6 +1221,7 @@ export default function DashboardPage() {
   const [adminLicenses, setAdminLicenses] = useState(null)
   const [adminPluginSettings, setAdminPluginSettings] = useState(null)
   const nav = useNavigate()
+  const location = useLocation()
   const isAdmin = isAdminRole(user?.role)
 
   useEffect(() => {
@@ -1112,9 +1229,18 @@ export default function DashboardPage() {
     if (!u) { nav('/login'); return }
     const parsed = JSON.parse(u)
     setUser(parsed)
+    const requestedTab = new URLSearchParams(location.search).get('tab')
     if (isAdminRole(parsed?.role)) setActive('admin-overview')
+    else if (requestedTab) setActive(requestedTab)
     loadData(parsed)
   }, [])
+
+  useEffect(() => {
+    if (!user || isAdmin) return
+    if (!user.emailVerified || !user.mobileVerified || !user.verificationCompletedAt) {
+      setActive('verify-user')
+    }
+  }, [user, isAdmin])
 
   const loadData = async (u = user) => {
     try {
@@ -1132,10 +1258,16 @@ export default function DashboardPage() {
       }
       else
       {
-        const [sR, lR] = await Promise.all([
+        const [mR, sR, lR] = await Promise.all([
+          API('/api/portal/me'),
           API('/api/portal/dashboard-stats'),
           API('/api/portal/licenses'),
         ])
+        if (mR.ok) {
+          const me = await mR.json()
+          setUser(me)
+          localStorage.setItem('vh_user', JSON.stringify(me))
+        }
         if (sR.ok) setStats(await sR.json())
         if (lR.ok) setLicenses(await lR.json())
       }
@@ -1155,8 +1287,8 @@ export default function DashboardPage() {
         {!isAdmin && active === 'verify-user' && <VerifyUserTab />}
         {!isAdmin && active === 'licenses'  && <LicensesTab  licenses={licenses} onRefresh={loadData} />}
         {!isAdmin && active === 'telemetry' && <TelemetryTab />}
-        {!isAdmin && active === 'orders'    && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Orders coming soon</div>}
-        {!isAdmin && active === 'billing'   && <div style={{ color:'#5A6A8A', padding:40, textAlign:'center' }}>Billing portal coming soon</div>}
+        {!isAdmin && active === 'orders'    && <OrdersTab />}
+        {!isAdmin && active === 'billing'   && <BillingTab />}
         {isAdmin && active === 'admin-overview'  && <AdminOverviewTab stats={adminStats} />}
         {isAdmin && active === 'admin-users'     && <AdminUsersTab users={adminUsers} />}
         {isAdmin && active === 'admin-licenses'  && <AdminLicensesTab licenses={adminLicenses} />}
